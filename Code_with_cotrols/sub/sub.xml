@@ -1,0 +1,107 @@
+<mujoco model="sub">
+    <compiler angle="radian"/>
+    <option gravity='0 0 -9.806' timestep='0.001' density="1000" viscosity="0.00009" />
+
+
+    <asset>
+        <mesh name="sub_mesh" scale="0.05 0.05 0.05" file="bluerov2_low_poly.stl" />
+        <mesh name="ccw_prop_mesh" file="t200_ccw_prop_low_poly.stl" />
+        <mesh name="cw_prop_mesh" file="t200_cw_prop_low_poly.stl" />
+        <texture type="skybox" builtin="gradient" rgb1="0.3 0.3 0.3" rgb2="1.0 1.0 1.0" width="512" height="512"/>
+    </asset>
+
+
+  <worldbody>
+
+        <!-- full sub dimensions: 18 in x 13.3 in x 10 in-->
+        <body name="sub_body" pos="0 0 1" euler="0 0 0">
+        <!-- <body name="sub" pos="24.5 12 1" euler="0 0 0"> -->
+            <freejoint/>
+            <!-- <geom name="reference_box" type="box" rgba="0.9 0.9 0.8 0" size="0.4572 0.33782 0.254" mass="9" /> -->
+            <geom name="sub_geom" type="mesh" euler="1.57 3.14 0" rgba="0.9 0.9 0.8 1" mesh="sub_mesh" size="0.4572 0.33782 0.254" mass="9" />
+            <!-- <camera name="sub_track_cam" mode="track" pos="1 0 0"/> -->
+            <!-- <camera name="sub_front_cam" mode="fixed" euler="0 1.57 0" pos="0 0 0" fovy="45"/> -->
+            <!-- Bouyancy -->
+            <body name="bfloat1" pos="-0.24 0.22 0.2">
+w               <geom name="gfloat1" type="box" size=" 0.02 0.02 0.02" rgba="0 0.3 1 1" mass="0.0001"/>
+                <site name="sfloat1" />
+            </body>
+            <body name="bfloat2" pos="0.24 0.22 0.2">
+                <geom name="gfloat2" type="box" size=" 0.02 0.02 0.02" rgba="0 0.3 1 1" mass="0.0001"/>
+                <site name="sfloat2" />
+            </body>
+            <body name="bfloat3" pos="0.24 -0.22 0.2">
+                <geom name="gfloat3" type="box" size=" 0.02 0.02 0.02" rgba="0 0.3 1 1" mass="0.0001"/>
+                <site name="sfloat3" />
+            </body>
+            <body name="bfloat4" pos="-0.24 -0.22 0.2">
+                <geom name="gfloat4" type="box" size=" 0.02 0.02 0.02" rgba="0 0.3 1 1" mass="0.0001"/>
+                <site name="sfloat4" />
+            </body>
+            <!-- Thruster -->
+            <body name="bt1" euler="1.57 -0.73 0" pos="-0.27 0.19 0">
+                <joint name="a1_thruster" type="hinge" axis="0 0 1"/>
+                <geom name="thruster1" type="cylinder" size="0.09 0.05" rgba="1 0.3 0 1" mass="0.0001"/>
+                <site name="st1" />
+            </body>
+            <body name="bt2" euler="1.57 3.87 0" pos="-0.27 -0.19 0">
+                <joint name="a2_thruster" type="hinge" axis="0 0 1"/>
+                <geom name="thruster2" type="cylinder" size="0.09 0.05" rgba="1 0.3 0 1" mass="0.0001"/>
+                <site name="st2" />
+            </body>
+            <body name="bt3" euler="1.57 0.73 0" pos="0.30 0.18 0">
+                <joint name="a3_thruster" type="hinge" axis="0 0 1"/>
+                <geom name="thruster3" type="cylinder" size="0.09 0.05" rgba="1 0.3 0 1" mass="0.0001"/>
+                <site name="st3" />
+            </body>
+            <body name="bt4" euler="1.57 -3.87 0" pos="0.30 -0.18 0">
+                <joint name="a4_thruster" type="hinge" axis="0 0 1"/>
+                <geom name="thruster4" type="cylinder" size="0.09 0.05" rgba="1 0.3 0 1" mass="0.0001"/>
+                <site name="st4" />
+            </body>
+            <body name="bt5" euler="0 0 0" pos="0 -0.22 0.15">
+                <joint name="a5_thruster" type="hinge" axis="0 0 1"/>
+                <geom name="thruster5" type="cylinder" size="0.09 0.05" rgba="1 0.3 0 1" mass="0.0001"/>
+                <site name="st5" />
+            </body>
+            <body name="bt6" euler="0 0 0" pos="0 0.22 0.15">
+                <joint name="a6_thruster" type="hinge" axis="0 0 1"/>
+                <geom name="thruster6" type="cylinder" size="0.09 0.05" rgba="1 0.3 0 1" mass="0.0001"/>
+                <site name="st6" />
+            </body>
+            <!-- <body name="camera_link1" euler="0 0 0" pos="-0.3 0 0.13">
+                <geom name="camera_cylinder" type="cylinder" size="0.004 0.0030" rgba="1 1 0 1" mass="0.0001"/>
+                <joint type="hinge" axis="0 0 1"/>
+                <body name="camera_link2" euler="1.57 0 0">
+                    <geom name="camera_cylinder2" type="cylinder" mass="0.0001" size="0.04 0.03" rgba="1 0 0 1"/>
+                    <geom name="camera_cylinder3" type="cylinder" euler="0 1.57 0" mass="0.0001" size="0.02 0.04" pos="-0.01 0 0" rgba="1 1 0 1"/>
+                    <camera name="sub_front_cam" mode="fixed" euler="0 1.57 0" pos="0 0 0" fovy="45"/>
+                </body>
+            </body> -->
+            <!-- <camera name="sub_tracking_cam" mode="fixed" pos="0 1 0"/> -->
+            <!-- <light pos="-1 0 3" dir="1 0 -3" mode="trackcom"/> -->
+            <!-- The mass of the weight was chosen to be slightly bigger than the total buoyancy of the balloons. -->
+            <site name="imu" pos="0 0 0"/>
+        </body>
+
+      <light directional="true" diffuse=".6 .6 .6" pos="0 0 1" dir="0 0 -10"/>
+      <!-- <camera name="camera1" mode="trackcom" pos="0 -1.3 1.6" xyaxes="1 0 0 0 0.707 0.707"/> -->
+    </worldbody>
+
+    <actuator>
+        <velocity name="a1"  joint="a1_thruster" gear=" 0  0  1 0 0 0"/>
+        <velocity name="a2"  joint="a2_thruster" gear=" 0  0  1 0 0 0"/>
+        <velocity name="a3"  joint="a3_thruster" gear=" 0  0  1 0 0 0"/>
+        <velocity name="a4"  joint="a4_thruster" gear=" 0  0  1 0 0 0"/>
+        <velocity name="a5"  joint="a5_thruster" gear=" 0  0  1 0 0 0"/>
+        <velocity name="a6"  joint="a6_thruster" gear=" 0  0  1 0 0 0"/>
+    </actuator>
+
+    <sensor>
+        <!-- <accelerometer name="Body_accel" site="imu"/> -->
+        <!-- <gyro name="Body_Gyro" site="imu"/> -->
+        <!-- <framepos name="Body_Pos" objtype="site" objname="imu"/> -->
+        <framequat name="Body_Quat" objtype="site" objname="imu"/>
+    </sensor>
+
+</mujoco>

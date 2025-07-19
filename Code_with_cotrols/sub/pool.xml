@@ -1,0 +1,32 @@
+<mujoco model="sub">
+    <compiler angle="radian"/>
+    <option gravity='0 0 -9.806' timestep='0.001' density="1000" viscosity="0.000001" />
+
+  <asset>
+    <model name="sub" file="sub.xml"/>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.3 0.3" rgb2="1.0 1.0 1.0" width="512" height="512"/>
+  </asset>
+
+
+  <worldbody>
+      <frame pos="0 0 0">
+        <attach model="sub" body="sub_body" prefix="1"/>
+      </frame>
+
+      <geom name="pool_right_wall" type="plane"   euler="1.57 0 1.57" pos="0 7.3125 -1.08" size="1.2 11.43 12"/>
+      <geom name="pool_left_wall"  type="plane"  euler="-1.57 0 1.57" pos="0 -7.3125 -1.08" size="1.2 11.43 12"/>
+      <geom name="pool_rear_wall"  type="plane"  euler="0 1.57 0" pos="-11.43 0 -0.9" size="1 7.3152  5.3152"/>
+      <geom name="pool_front_wall" type="plane"  euler="0 -1.57 0" pos="11.43 0 -1.18" size="1.3 7.3152 7.3152"/>
+      <geom name="pool_floor"      type="plane"  euler="0 0.0354833708 0" pos="0 0 -2.16" size="11.43 7.3152 .01"/>
+
+      <!-- <site name="people1" type="cylinder" size="0.1 0.5"  pos="12.43 2.5 2"/> 
+      <site name="people2" type="cylinder" size="0.1 0.5"  pos="0 -9.3152 2"/> 
+      <site name="people3" type="cylinder" size="0.1 0.5"  pos="0 8.3152 2"/> 
+      <site name="people4" type="cylinder" size="0.1 0.5"  pos="-14.43 0 2"/>  -->
+
+      <!-- <frame pos="0 4 0"> -->
+      <!--   <attach model="sub" body="sub_body" prefix="2"/> -->
+      <!-- </frame> -->
+  </worldbody>
+
+</mujoco>

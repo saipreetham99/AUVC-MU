@@ -1,0 +1,190 @@
+# Xbox-style gamepad ➜ UDP PWM packet for Pi/PCA9685
+# """
+
+import creds
+import pygame
+import socket
+import struct
+import time
+import sys
+
+# ——— topside IP config ———
+PI_IP, UDP_PORT = "192.168.2.11", 5005
+# ————————————————
+
+NEUTRAL = 1500  # µs mid-pulse
+AMP, AMP_STEP = 100, 100
+LIGHT_OFF = 1100
+LIGHT_ON = 1900
+AMP_MIN, AMP_MAX = 100, 400
+DEAD, LOOP_DT = 0.6, 0.02  # 50 Hz
+
+# ===== tweak if axes differ (run diagnostic tool) =====
+SURGE_AXIS, STRAFE_AXIS, HEAVE_AXIS, YAW_AXIS = 1, 0, 3, 2
+# ======================================================
+
+BTN_LB, BTN_RB = 9, 10  # LB = CCW, RB = CW
+BTN_BACK, BTN_START = 4, 6
+BTN_HAT_UP, BTN_HAT_DOWN = 11, 12
+AMP_COOLDOWN, last_amp = 0.25, 0
+SHOW_STATUS, STATUS_DT, last_stat = True, 0.5, 0
+REQUIRE_BACK = False  # hold BACK for safety?
+armed = False
+BTN_HAT_RIGHT, BTN_HAT_LEFT = 14, 13
+light = False
+
+
+def clamp(x):
+    return max(-1.0, min(1.0, x))
+
+
+def to_pwm(x):
+    return int(NEUTRAL + x * AMP)
+
+
+def send_neutral(sock, addr):
+    sock.sendto(struct.pack("<6H", *(NEUTRAL,) * 6), addr)
+
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+pygame.init()
+pygame.joystick.init()
+if pygame.joystick.get_count() == 0:
+    sys.exit("No gamepad found")
+pad = pygame.joystick.Joystick(0)
+pad.init()
+
+print(f"Gamepad: {pad.get_name()}  ➜  {PI_IP}:{UDP_PORT}")
+send_neutral(sock, (PI_IP, UDP_PORT))
+timer = 0
+try:
+    t_next = time.time()
+    while True:
+        # ——— event pump ———
+        for e in pygame.event.get():
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_UP and time.time() - last_amp > AMP_COOLDOWN:
+                    AMP = min(AMP + AMP_STEP, AMP_MAX)
+                    last_amp = time.time()
+                    print("AMP", AMP)
+                elif e.key == pygame.K_DOWN and time.time() - last_amp > AMP_COOLDOWN:
+                    AMP = max(AMP - AMP_STEP, AMP_MIN)
+                    last_amp = time.time()
+                    print("AMP", AMP)
+
+            elif e.type == pygame.JOYHATMOTION:
+                _, hat = e.value
+                if hat == 1 and time.time() - last_amp > AMP_COOLDOWN:
+                    AMP = min(AMP + AMP_STEP, AMP_MAX)
+                    last_amp = time.time()
+                    print("AMP", AMP)
+                elif hat == -1 and time.time() - last_amp > AMP_COOLDOWN:
+                    AMP = max(AMP - AMP_STEP, AMP_MIN)
+                    last_amp = time.time()
+                    print("AMP", AMP)
+
+            elif e.type == pygame.JOYBUTTONDOWN:
+                if e.button == BTN_START:
+                    armed = not armed
+                    print(f"[{'ARM' if armed else 'SAFE'}]")
+                elif e.button == BTN_HAT_RIGHT:
+                    light = True
+                    print("[LIGHT ON]")
+                elif e.button == BTN_HAT_LEFT:
+                    light = False
+                    print("[LIGHT OFF]")
+
+                elif (
+                    e.button == 11 and time.time() - last_amp > AMP_COOLDOWN
+                ):  # D‑pad up on macOS
+                    AMP = min(AMP + AMP_STEP, AMP_MAX)
+                    last_amp = time.time()
+                    print("AMP", AMP)
+                elif (
+                    e.button == 12 and time.time() - last_amp > AMP_COOLDOWN
+                ):  # D‑pad down on macOS
+                    AMP = max(AMP - AMP_STEP, AMP_MIN)
+                    last_amp = time.time()
+                    print("AMP", AMP)
+
+        # sticks
+        surge = -pad.get_axis(SURGE_AXIS)
+        strafe = pad.get_axis(STRAFE_AXIS)
+        heave = -pad.get_axis(HEAVE_AXIS)
+        yaw = pad.get_axis(YAW_AXIS)
+        for v in ("surge", "strafe", "heave", "yaw"):
+            if abs(locals()[v]) < DEAD:
+                locals()[v] = 0
+
+        # bumper-override yaw (CW +, CCW −)
+        rb, lb = pad.get_button(BTN_RB), pad.get_button(BTN_LB)
+        if rb ^ lb:
+            yaw = 1.0 if rb else -1.0
+
+        # if time.time() - timer > 1:
+        #     print("surge : ", surge)
+        #     print("strafe : ", strafe)
+        #     print("heave : ", heave)
+        #     print("yaw: ", yaw)  # dead-zones
+        #     timer = time.time()
+
+        # safety gate
+        if REQUIRE_BACK and not pad.get_button(BTN_BACK):
+            surge = strafe = heave = yaw = 0
+        if not armed:
+            surge = strafe = heave = yaw = 0
+        if pad.get_button(BTN_BACK):
+            raise KeyboardInterrupt(
+                " Back button is pressed. Closing Socket and Terminating Program"
+            )
+        # ——— correct 45° mix ———
+        fl = clamp(surge - strafe - yaw)  # Front-Left
+        fr = clamp(surge + strafe + yaw)  # Front-Right
+        rl = clamp(surge + strafe - yaw)  # Rear-Left   (fixed sign)
+        rr = clamp(surge - strafe + yaw)  # Rear-Right
+        v1 = clamp(heave)
+        v2 = clamp(-heave)
+        light_pwm = LIGHT_ON if light else LIGHT_OFF
+
+        sock.sendto(
+            struct.pack(
+                "<7H",
+                to_pwm(fl),
+                to_pwm(fr),
+                to_pwm(rl),
+                to_pwm(rr),
+                to_pwm(v1),
+                to_pwm(v2),
+                light_pwm,
+            ),
+            (PI_IP, UDP_PORT),
+        )
+
+        # status spam
+        if SHOW_STATUS and time.time() - last_stat > STATUS_DT:
+            print(
+                f"[{'ARM' if armed else 'SAFE'}] F:{surge:+.2f} S:{strafe:+.2f} H:{heave:+.2f} Y:{yaw:+.2f}"
+                f"L:{'ON' if light else 'OFF'}",
+                end="\r",
+                flush=True,
+            )
+            last_stat = time.time()
+
+        # pacing
+        t_next += LOOP_DT
+        delay = t_next - time.time()
+        if delay > 0:
+            time.sleep(delay)
+        else:
+            t_next = time.time()  # we slipped more than one frame
+
+except KeyboardInterrupt as e:
+    print(e)
+    pass
+finally:
+    print("Neutral shutdown…")
+    send_neutral(sock, (PI_IP, UDP_PORT))
+    time.sleep(0.05)
+    send_neutral(sock, (PI_IP, UDP_PORT))
+    sock.close()
+    pygame.quit()

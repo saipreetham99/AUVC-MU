@@ -1,0 +1,1753 @@
+// Copyright 2019 DeepMind Technologies Limited
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Text;
+using System.Xml;
+using UnityEngine;
+using UnityEngine.Profiling;
+
+namespace Mujoco {
+
+  public class PhysicsRuntimeException : Exception {
+    public PhysicsRuntimeException(string message) : base(message) {}
+  }
+
+  public class MjScene : MonoBehaviour {
+
+    public unsafe MujocoLib.mjModel_* Model = null;
+    public unsafe MujocoLib.mjData_* Data = null;
+
+    // Thread-safe storage for control forces
+    private volatile bool hasControlForces = false;
+    private volatile bool needToWaitForSendingOnSuccess = true; 
+    private readonly object serverSimulationLock = new object();
+    private readonly Queue<int> pendingSteps = new Queue<int>();
+    private float[] pendingControlForces = new float[6];
+
+    // Force Rendering/Force Application
+    public int[] siteCtrlIds = new int[] { 5, 6, 7, 8, 9, 10 }; // a1-a6
+    [SerializeField]
+    private List<ArrowController> ArrowControllers;
+
+    // Socket server configuration
+    [Header("Socket Server Settings")]
+    public bool enableSocketServer = true;
+    public string serverIpAddress = "127.0.0.1";
+
+
+    const int MAX_SENSOR_COUNT= 5; // TODO: IMU and Depth for a single sub (Double it! Second sub on the way!)
+    private static float[] _sensorData = new float[MAX_SENSOR_COUNT];
+    private static byte[] _sensorDataBytes = new byte[MAX_SENSOR_COUNT * sizeof(float)];
+
+    private static byte[] modelInfoBuffer = new byte[6 * sizeof(float)];
+    public int numSteps = 0;
+
+    public enum MsgHeader {
+      ERROR = 0,           
+      NO_ERROR = 1,
+      HEARTBEAT = 2,
+      GET_MODEL_INFO = 3,
+      GET_SENSORDATA = 4,
+      GET_RGB_IMAGE = 5,
+      GET_MASKED_IMAGE = 6,
+      APPLY_CTRL = 7,
+      STEP_SIM = 8,
+      RESET = 9,
+    }
+
+    public struct CommandInfo {
+      public MsgHeader MsgHeader;
+      public string Name;
+      public string HelpString;
+      public int ExpectedRecvBytes;  // Expected bytes to receive from client
+      public int ExpectedSendBytes;  // Expected bytes to send to client
+      public float ExpectedTimeoutSeconds; // Expected timeout for this command
+      public int HelpStringMessageLength; // Length of HelpString in bytes (UTF-8 encoded)
+
+      public CommandInfo(MsgHeader msgHeader, string name, string helpString, int expectedRecvBytes, int expectedSendBytes, float expectedTimeoutSeconds = 1.0f) {
+        MsgHeader = msgHeader;
+        Name = name;
+        HelpString = helpString;
+        ExpectedRecvBytes = expectedRecvBytes;
+        ExpectedSendBytes = expectedSendBytes;
+        ExpectedTimeoutSeconds = expectedTimeoutSeconds;
+        HelpStringMessageLength = System.Text.Encoding.UTF8.GetByteCount(helpString); // UTF-8 byte count
+      }
+    }
+
+    private static readonly CommandInfo[] Commands = {
+      new CommandInfo(
+            MsgHeader.ERROR,                            // ENUM HEADER CODE
+            "ERROR",                                    // Name
+            $"<ret_only:{(int)MsgHeader.ERROR}>\n",     // Help String
+            0,                                          // Expected Recv Bytes
+            1,                                          // Expected Send Bytes
+            0.1f                                        // Expected Timeout 
+          ),
+      new CommandInfo(
+           MsgHeader.NO_ERROR,                         // ENUM HEADER CODE
+           "NO_ERROR",                                 // Name
+           $"<ret_only:{(int)MsgHeader.NO_ERROR}>\n",  // Help String
+           0,                                          // Expected Recv Bytes
+           1,                                          // Expected Send Bytes
+           0.1f                                        // Expected Timeout 
+          ),
+      new CommandInfo(
+            MsgHeader.HEARTBEAT,                          // ENUM HEADER CODE 
+            "HEARTBEAT",                                  // Name
+            $"[send: {(int)MsgHeader.HEARTBEAT}.0f],\n"+  // Help String
+             "recv: status_byte\n",
+            4,                                            // Expected Recv Bytes
+            1,                                            // Expected Send Bytes
+            0.1f                                          // Expected Timeout 
+          ),
+      new CommandInfo(
+            MsgHeader.GET_MODEL_INFO,                         // ENUM HEADER CODE 
+            "GET_MODEL_INFO",                                 // Name
+            $"[send: {(int)MsgHeader.GET_MODEL_INFO}.0f]\n,"+ // Help String
+             " recv: [<d.time>,"+                                                    
+             " <m.nq>,"+
+             " <m.nv>,"+
+             " <m.na>,"+
+             " <m.nu>,"+
+             " <m.nbody>]\n",
+            4,                                                // Expected Recv Bytes
+            24,                                               // Expected Send Bytes
+            0.1f                                              // Expected Timeout 
+          ),
+      new CommandInfo(
+            MsgHeader.GET_SENSORDATA,                         // ENUM HEADER CODE
+            "GET_SENSORDATA",                                 // Name
+            $"[send: {(int)MsgHeader.GET_SENSORDATA}.0f],\n"+ // Help String
+             " recv:[<sub1:imu.w>,"+
+             " <sub1:imu.x>,"+
+             " <sub1:imu.y>,"+
+             " <sub1:imu.z>],\n"+
+             // " recv: <sub2:imu.w>,"+
+             //       " <sub2:imu.x>,"+
+             //       " <sub2:imu.y>,"+
+             //       " <sub2:imu.z]\n"
+             " recv:[<d.time>],\n",
+             4,                                               // Expected Recv Bytes
+             4069,                                            // TODO: Expected Send Bytes
+             2.0f                                             // Expected Timeout
+          ),
+      new CommandInfo(
+            MsgHeader.GET_RGB_IMAGE,                          // ENUM HEADER CODE
+            "GET_RGB_IMAGE",                                  // Name
+            $"[send: {(int)MsgHeader.GET_RGB_IMAGE}.0f],\n"+  // Help String
+             " recv: <[r][g][b] pixels, row order>]\n",
+            4,                                                // Expected Recv Bytes
+            4096,                                             // TODO: Expected Recv Bytes
+            2.0f                                              // Expected Timeout 
+          ),
+      new CommandInfo(
+            MsgHeader.GET_MASKED_IMAGE,                         // ENUM HEADER CODE
+            "GET_MASKED_IMAGE",                                 // Name
+            $"[send: {(int)MsgHeader.GET_MASKED_IMAGE}.0f],\n"+ // Help String
+             " recv: [<[r][g][b] pixels, row order>]\n",
+            4,                                                  // Expected Recv Bytes
+            1,                                                  // Expected Send Bytes
+            2.0f                                                // Expected Timeout 
+          ),
+      new CommandInfo(
+            MsgHeader.APPLY_CTRL,                                // ENUM HEADER CODE
+            "APPLY_CTRL",                                        // Name
+            $"[idx:0][send: {(int)MsgHeader.APPLY_CTRL}.0f],\n"+ // Help String
+             " [idx:1]<numSteps> (Simulate n steps after "+
+                                  "applying control),\n"+
+             " [idx:2-7]f1,f2,f3,f4,f5,f6],\n"+
+             " recv: status_byte\n",
+            32,                                                 // Expected Revc Bytes
+            1,                                                  // Expected Send Bytes
+            1.0f                                                // Expected Timeout 
+          ),
+      new CommandInfo(
+            MsgHeader.STEP_SIM,                                   // ENUM HEADER CODE
+            "STEP_SIM",                                           // Name
+            $"[idx:0][send: {(int)MsgHeader.STEP_SIM}.0f],\n"+    // Help String
+             " [idx:1]<numSteps>default=1 (Simulate n steps),\n"+
+             " recv: status_byte\n",
+            8,                                                    // Expected Revc Bytes
+            1,                                                    // Expected Send Bytes
+            1.0f                                                  // Expected Timeout 
+          ),
+      new CommandInfo(
+            MsgHeader.RESET,                                            // ENUM HEADER CODE
+            "RESET",                                                    // Name
+            $"[idx:0][send: {(int)MsgHeader.RESET}.0f],\n"+             // Help String
+             "[idx:1]<numSteps(default=0)>,\n"+
+             "[idx:2-8]<sub1: pose array [Px,Py,Pz,w,x,y,z]>,"+
+             "[idx:9-11] <vel [LinVelx, LinVely, LinVelz]>]"+
+             "[idx:12-14] <ang vel [AngVelx, AngVely, AngVelz]>]\n"+
+             // "[idx:15-21]<sub1: pose array [Px,Py,Pz,w,x,y,z]>,"+
+             // "[idx:22-24] <vel [LinVelx, LinVely, LinVelz]>]"+
+             // "[idx:25-27] <ang vel [AngVelx, AngVely, AngVelz]>]\n"+
+             " recv: status_byte\n",
+            60,                                                         // Expected Revc Bytes
+            1,                                                          // Expected Send Bytes
+            2.0f                                                        // Expected Timeout 
+          ),
+    };
+
+    public static int NetHelpMessageLength =0;
+
+
+    // Common Socket structure to avoid code duplication
+    private class SocketData
+    {
+      public Socket socket;
+      public int port;
+      public bool isRunning;
+      public Thread thread;
+      public string name;
+    }
+
+    // Server variables with static initialization
+    private SocketData ImageSocket = new SocketData {
+      port = 60000,
+      isRunning = false,
+      name = "Observation"
+    };
+
+    private SocketData actionSocket = new SocketData {
+      port = 60001,
+      isRunning = false,
+      name = "Action"
+    };
+
+    private object serverLock = new object();
+
+    // OPTIMIZATION: Reusable buffers (moved to class level for better organization)
+    private static byte[] reusableCommandBuffer = new byte[64]; // Max command size (RESET = 60 bytes)
+    private static readonly byte[] heartbeatResponse = new byte[] { 0 };
+    private static readonly byte[] errorResponse = new byte[] { 1 };
+    private static readonly byte[] successResponse = new byte[] { 0 };
+
+    // Public and global access to the active MjSceneGenerationContext.
+    // Throws an exception if accessed when the scene is not being generated.
+    public MjcfGenerationContext GenerationContext {
+      get {
+        if (_generationContext == null) {
+          throw new InvalidOperationException(
+              "This property can only be accessed from the scope of MjComponent.GenerateMjcf().");
+        }
+        return _generationContext;
+      }
+    }
+
+    public static MjScene Instance {
+      get {
+        if (_instance == null) {
+          var instances = FindObjectsOfType<MjScene>();
+          if (instances.Length >= 1) { // even one is too much - _instance shouldn't have been null.
+            throw new InvalidOperationException(
+                "A MjScene singleton is created automatically, yet multiple instances exist.");
+          } else {
+            GameObject go = new GameObject("MjScene");
+            _instance = go.AddComponent<MjScene>();
+          }
+        }
+        return _instance;
+      }
+    }
+
+    public static bool InstanceExists { get => _instance != null; }
+
+    public void Awake() {
+      if (_instance == null) {
+        _instance = this;
+      } else if (_instance != this) {
+        throw new InvalidOperationException(
+            "MjScene is a singleton, yet multiple instances found.");
+      }
+    }
+
+    private static MjScene _instance = null;
+
+    private List<MjComponent> _orderedComponents;
+
+    public event EventHandler<MjStepArgs> postInitEvent;
+    public event EventHandler<MjStepArgs> preUpdateEvent;
+    public event EventHandler<MjStepArgs> ctrlCallback;
+    public event EventHandler<MjStepArgs> postUpdateEvent;
+    public event EventHandler<MjStepArgs> preDestroyEvent;
+
+
+    private void InitializeArrowControllers() {
+      ArrowControllers = new List<ArrowController>();
+      for (int j = 0; j < siteCtrlIds.Length; j++) {
+        var arrowGO = GameObject.Find($"1st{j+1}/Arrow_{j+1}");
+        if (arrowGO == null) {
+          Debug.LogWarning($"GameObject for Arrow_{j+1} not found.");
+          continue;
+        }
+
+        // Debug: Check if GameObject is active
+        Debug.Log($"Arrow_{j+1} found. Active: {arrowGO.activeSelf}, ActiveInHierarchy: {arrowGO.activeInHierarchy}");
+
+        // Debug: List all components on the GameObject
+        var components = arrowGO.GetComponents<Component>();
+        Debug.Log($"Arrow_{j+1} has {components.Length} components:");
+        foreach (var comp in components) {
+          if (comp == null) {
+            Debug.Log("  - [Missing Script Reference]");
+          } else {
+            Debug.Log($"  - {comp.GetType().Name}");
+          }
+        }
+
+        // Try different ways to get the component
+        var ctrl = arrowGO.GetComponent<ArrowController>();
+        if (ctrl == null) {
+          // Try getting it from children
+          ctrl = arrowGO.GetComponentInChildren<ArrowController>();
+          if (ctrl != null) {
+            Debug.Log($"Found ArrowController in child of Arrow_{j+1}");
+          }
+        }
+
+        if (ctrl != null) {
+          ArrowControllers.Add(ctrl);
+          Debug.Log($"Arrow_{j+1} initialized and set to 0 for siteCtrlId {siteCtrlIds[j]}");
+          ctrl.SetLength(0.0f);
+        } else {
+          Debug.LogWarning($"ArrowController not found on Arrow_{j+1}.");
+
+          // Check if it might be on parent
+          if (arrowGO.transform.parent != null) {
+            var parentCtrl = arrowGO.transform.parent.GetComponent<ArrowController>();
+            if (parentCtrl != null) {
+              Debug.Log($"Found ArrowController on parent of Arrow_{j+1}");
+            }
+          }
+        }
+      }
+    }
+
+    // Alternative: Try waiting more frames
+    private IEnumerator DeferredArrowInit() {
+      // Wait multiple frames to ensure everything is initialized
+      for (int i = 0; i < 5; i++) {
+        yield return null;
+      }
+      InitializeArrowControllers();
+    }
+
+    protected unsafe void Start() {
+      SceneRecreationAtLateUpdateRequested = false;
+      CreateScene();
+
+      StartCoroutine(DeferredArrowInit());
+
+      // Register the control callback
+      ctrlCallback += OnControlCallback;
+
+      // Start the socket server after scene creation
+      if (enableSocketServer) {
+        NetHelpMessageLength = CalculateHelpMessageLength(Commands);
+        StartSocketServer(ImageSocket);
+        StartSocketServer(actionSocket);
+      }
+    }
+
+    protected unsafe void OnDestroy() {
+      // Stop the socket server before destroying the scene
+      StopSocketServer(ImageSocket);
+      StopSocketServer(actionSocket);
+      DestroyScene();
+    }
+
+    protected unsafe void FixedUpdate() {
+      // Get pending steps
+      lock (serverSimulationLock) {
+        while (pendingSteps.Count > 0) {
+          numSteps += pendingSteps.Dequeue();
+        }
+      }
+
+      int stepsThisFrame = Math.Min(numSteps, 0);
+
+      for (int i = 0; i < stepsThisFrame; i++) {
+        preUpdateEvent?.Invoke(this, new MjStepArgs(Model, Data));
+        StepScene();
+        Debug.Log($"Stepping Scene: {numSteps} remaining");
+        postUpdateEvent?.Invoke(this, new MjStepArgs(Model, Data));
+        numSteps--;
+        if(numSteps<0){numSteps = 0;}
+      }
+      // Set this flag after we have ran the sim n times 
+      if(stepsThisFrame > 0){needToWaitForSendingOnSuccess = true};
+      else{needToWaitForSendingOnSuccess = false;}
+      //
+      // lock (serverSimulationLock) {
+      //   while (pendingSteps.Count > 0) {
+      //     numSteps += pendingSteps.Dequeue();
+      //   }
+      // }
+      // while (numSteps > 0) {
+      //   preUpdateEvent?.Invoke(this, new MjStepArgs(Model, Data));
+      //   StepScene();
+      //   postUpdateEvent?.Invoke(this, new MjStepArgs(Model, Data));
+      //   numSteps--;
+      // }
+    }
+
+    public bool SceneRecreationAtLateUpdateRequested = false;
+
+    protected unsafe void LateUpdate() {
+      if (SceneRecreationAtLateUpdateRequested) {
+        RecreateScene();
+        SceneRecreationAtLateUpdateRequested = false;
+      }
+    }
+
+    // Context used during scene generation where components will store their shared dependencies
+    // (such as the mesh assets they reference, or common compiler settings that need to be resolved
+    // globally).
+    // The field will be initialized with a class instance only during the scene generation.
+    // A public read-only property will provide MjComponents with access to the instance
+    // of that field.
+    private MjcfGenerationContext _generationContext;
+
+    // Builds a new Mujoco scene.
+    public unsafe XmlDocument CreateScene(bool skipCompile=false) {
+      if (_generationContext != null) {
+        throw new InvalidOperationException(
+            "The scene is currently being generated on another thread.");
+      }
+      // Linearize the hierarchy of transforms of the components.
+      // We will use this list to update the transforms of the associated GameObject in a way that
+      // ensures we first update the parent transforms, and then we progress down the hierarchy
+      // tree and update the children.
+      // We're doing this, because we will use Unity's hierarchical transforms system to translate
+      // Mujoco elements' world transforms directly to Unity's world coordinates. That however
+      // will only work if we can guarantee that for every child, the parent transforms have already
+      // been recalculated.
+      //
+      // DESIGN: An alternative to that would be to operate in local space on the Unity side.
+      // I briefly explored that approach, but decided against it. It increases the amount of code
+      // on the side of the individual components. This solution allows to restrict the code in the
+      // components to a bare minimum, at the expense of one extra method here.
+      var hierarchyRoots = FindObjectsOfType<MjComponent>()
+        .Where(component => MjHierarchyTool.FindParentComponent(component) == null)
+        .Select(component => component.transform)
+        .Distinct();
+      _orderedComponents = new List<MjComponent>();
+      foreach (var root in hierarchyRoots) {
+        _orderedComponents.AddRange(MjHierarchyTool.LinearizeHierarchyBFS(root));
+      }
+
+      XmlDocument sceneMjcf = null;
+      try {
+        _generationContext = new MjcfGenerationContext();
+        sceneMjcf = GenerateSceneMjcf(_orderedComponents);
+      } catch (Exception e) {
+        _generationContext = null;
+        Debug.LogException(e);
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
+        throw;
+      }
+      _generationContext = null;
+
+      // Save the Mjcf to a file for debug purposes.
+      var settings = MjGlobalSettings.Instance;
+      if (settings && !string.IsNullOrEmpty(settings.DebugFileName)) {
+        SaveToFile(sceneMjcf, Path.Combine(Application.temporaryCachePath, settings.DebugFileName));
+      }
+
+      if (!skipCompile) {
+        // Compile the scene from the Mjcf.
+        CompileScene(sceneMjcf, _orderedComponents);
+      }
+      postInitEvent?.Invoke(this, new MjStepArgs(Model, Data));
+      return sceneMjcf;
+    }
+
+    private unsafe void CompileScene(
+        XmlDocument mjcf, IEnumerable<MjComponent> components) {
+      Model = MjEngineTool.LoadModelFromString(mjcf.OuterXml);
+      if (Model == null) {
+        throw new NullReferenceException("Model loading failed, see other errors for root cause.");
+      } else {
+        Data = MujocoLib.mj_makeData(Model);
+      }
+      if (Data == null) {
+        throw new NullReferenceException("Model loaded but mj_makeData failed.");
+      }
+
+      // Bind the components to their Mujoco counterparts.
+      foreach (var component in components) {
+        component.BindToRuntime(Model, Data);
+      }
+    }
+
+    public unsafe void SyncUnityToMjState() {
+      foreach (var component in _orderedComponents) {
+        if (component != null && component.isActiveAndEnabled) {
+          component.OnSyncState(Data);
+        }
+      }
+    }
+
+    // This must be called after every change in the Unity scene during runtime, in order to keep the
+    // MuJoCo physics scene in sync.  The spatial arrangement in the MJCF that creates the new physics
+    // is defined by the Unity transforms; therefore, we:
+    // 1. cache the joint states;
+    // 2. reset the Unity scene to its configuration at initialization;
+    // 3. recreate the scene in this pristine configuration;
+    // 4. rehydrate the physics scene, and sync the Unity scene to it.
+    public unsafe void RecreateScene() {
+      // cache joint states in order to re-apply it to the new scene
+      var joints = FindObjectsOfType<MjBaseJoint>();
+      var positions = new Dictionary<MjBaseJoint, double[]>();
+      var velocities = new Dictionary<MjBaseJoint, double[]>();
+      foreach (var joint in joints) {
+        if (joint.QposAddress > -1) { // newly added components shouldn't be cached
+          switch (Model->jnt_type[joint.MujocoId]) {
+            default:
+            case (int)MujocoLib.mjtJoint.mjJNT_HINGE:
+            case (int)MujocoLib.mjtJoint.mjJNT_SLIDE:
+              positions[joint] = new double[] {Data->qpos[joint.QposAddress]};
+              velocities[joint] = new double[] {Data->qvel[joint.DofAddress]};
+              break;
+            case (int)MujocoLib.mjtJoint.mjJNT_BALL:
+              positions[joint] = new double[] {
+                Data->qpos[joint.QposAddress],
+                Data->qpos[joint.QposAddress+1],
+                Data->qpos[joint.QposAddress+2],
+                Data->qpos[joint.QposAddress+3]};
+              velocities[joint] = new double[] {
+                Data->qvel[joint.DofAddress],
+                Data->qvel[joint.DofAddress+1],
+                Data->qvel[joint.DofAddress+2]};
+              break;
+            case (int)MujocoLib.mjtJoint.mjJNT_FREE:
+              positions[joint] = new double[] {
+                Data->qpos[joint.QposAddress],
+                Data->qpos[joint.QposAddress+1],
+                Data->qpos[joint.QposAddress+2],
+                Data->qpos[joint.QposAddress+3],
+                Data->qpos[joint.QposAddress+4],
+                Data->qpos[joint.QposAddress+5],
+                Data->qpos[joint.QposAddress+6]};
+              velocities[joint] = new double[] {
+                Data->qvel[joint.DofAddress],
+                Data->qvel[joint.DofAddress+1],
+                Data->qvel[joint.DofAddress+2],
+                Data->qvel[joint.DofAddress+3],
+                Data->qvel[joint.DofAddress+4],
+                Data->qvel[joint.DofAddress+5]};
+              break;
+          }
+        }
+      }
+
+      // update unity transforms according to qpos0, so they're ready to create the new MJCF
+      MujocoLib.mj_resetData(Model, Data);
+      MujocoLib.mj_kinematics(Model, Data);
+      SyncUnityToMjState();
+
+      // Delete previous model, data
+      DestroyScene();
+      // Create a new MJCF and new model+data, indices may be different
+      CreateScene();
+
+      // for joints that persisted, set state of the new MuJoCo scene according to the cached state
+      foreach (var joint in joints) {
+        try {
+          var position = positions[joint]; // this will fail for new joints, hence try/catch
+          var velocity = velocities[joint];
+          switch (Model->jnt_type[joint.MujocoId]) {
+            default:
+            case (int)MujocoLib.mjtJoint.mjJNT_HINGE:
+            case (int)MujocoLib.mjtJoint.mjJNT_SLIDE:
+              Data->qpos[joint.QposAddress] = position[0];
+              Data->qvel[joint.DofAddress] = velocity[0];
+              break;
+            case (int)MujocoLib.mjtJoint.mjJNT_BALL:
+              Data->qpos[joint.QposAddress] = position[0];
+              Data->qpos[joint.QposAddress+1] = position[1];
+              Data->qpos[joint.QposAddress+2] = position[2];
+              Data->qpos[joint.QposAddress+3] = position[3];
+              Data->qvel[joint.DofAddress] = velocity[0];
+              Data->qvel[joint.DofAddress+1] = velocity[1];
+              Data->qvel[joint.DofAddress+2] = velocity[2];
+              break;
+            case (int)MujocoLib.mjtJoint.mjJNT_FREE:
+              Data->qpos[joint.QposAddress] = position[0];
+              Data->qpos[joint.QposAddress+1] = position[1];
+              Data->qpos[joint.QposAddress+2] = position[2];
+              Data->qpos[joint.QposAddress+3] = position[3];
+              Data->qpos[joint.QposAddress+4] = position[4];
+              Data->qpos[joint.QposAddress+5] = position[5];
+              Data->qpos[joint.QposAddress+6] = position[6];
+              Data->qvel[joint.DofAddress] = velocity[0];
+              Data->qvel[joint.DofAddress+1] = velocity[1];
+              Data->qvel[joint.DofAddress+2] = velocity[2];
+              Data->qvel[joint.DofAddress+3] = velocity[3];
+              Data->qvel[joint.DofAddress+4] = velocity[4];
+              Data->qvel[joint.DofAddress+5] = velocity[5];
+              break;
+          }
+        } catch {}
+      }
+      // update mj transforms:
+      MujocoLib.mj_kinematics(Model, Data);
+      SyncUnityToMjState();
+    }
+
+    // Destroys the Mujoco scene.
+    public unsafe void DestroyScene() {
+      preDestroyEvent?.Invoke(this, new MjStepArgs(Model, Data));
+      if (Model != null) {
+        MujocoLib.mj_deleteModel(Model);
+        Model = null;
+      }
+      if (Data != null) {
+        MujocoLib.mj_deleteData(Data);
+        Data = null;
+      }
+    }
+
+    // Quaternion to Euler angles conversion and buoyancy variables
+    private static double[] _Qorn = new double[4] {0, 0, 0, 0}; // w,x,y,z
+    private static double[] _orn = new double[3] {0, 0, 0}; // r[forward axis],p[possibly side axis],y[vertical axis]
+
+    // Physics parameters for buoyancy
+    [Header("Buoyancy Physics")]
+    public bool enableBuoyancyPhysics = true;
+    public float waterGain = 470.0f;
+    public float volumeDisplaced = 0.4572f * 0.33782f * 0.254f;
+    public float startHeight = 0.0f;
+    public int[] thrusterControlIndices = new int[] { 6, 7, 8, 9 };
+    public string[] floatSiteNames = new string[] { "sfloat1", "sfloat2", "sfloat3", "sfloat4" };
+    private int[] floatSiteIds = null;
+
+    /// <summary>
+    /// Convert quaternion to Euler angles in degrees
+    /// </summary>
+    private void QuaternionToEuler(double x, double y, double z, double w, ref double roll, ref double pitch, ref double yaw) {
+      double t0 = +2.0 * (w * x + y * z);
+      double t1 = +1.0 - 2.0 * (x * x + y * y);
+      roll = Math.Atan2(t0, t1) * (180.0 / Math.PI);
+
+      double t2 = +2.0 * (w * y - z * x);
+      t2 = Math.Max(-1.0, Math.Min(1.0, t2));
+      pitch = Math.Asin(t2) * (180.0 / Math.PI);
+
+      double t3 = +2.0 * (w * z + x * y);
+      double t4 = +1.0 - 2.0 * (y * y + z * z);
+      yaw = Math.Atan2(t3, t4) * (180.0 / Math.PI);
+    }
+
+    /// <summary>
+    /// Apply buoyancy physics to the simulation
+    /// </summary>
+    private unsafe void ApplyBuoyancyPhysics() {
+      if (!enableBuoyancyPhysics || Model == null || Data == null) {
+        return;
+      }
+
+
+      // Get position data for height calculation
+      double height = Data->qpos[2]; // Assuming qpos[2] is the vertical position
+
+      // Calculate buoyancy force
+      float maxBuoyancyForce = 9.806f * volumeDisplaced * 1000;
+      float force_error = (startHeight - (float)height) * waterGain;
+
+      // // Get orientation
+      // // Assuming sensordata contains quaternion data in order: w, x, y, z
+      // if (Model->nsensordata >= 4) {
+      //   for (int i = 0; i < 4; i++) {
+      //     _Qorn[i] = Data->sensordata[i];
+      //   }
+      //
+      //   // Convert to Euler angles
+      //   QuaternionToEuler(_Qorn[1], _Qorn[2], _Qorn[3], _Qorn[0],
+      //                      ref _orn[0], ref _orn[1], ref _orn[2]);
+      // }
+
+      double[] myTorque = new double[3] { 0.0, 0.0, 0.0 };
+      double[] myForce = new double[3] { 0.0, 0.0, 0.0 };
+
+      float netForce = 0f;
+
+      // Apply forces based on height
+      if (height <= startHeight - 0.1) {
+        // Object is below target height - apply upward buoyancy
+        float forceClamped = Math.Min(force_error, maxBuoyancyForce);
+        netForce = forceClamped / 4.0f;
+        // Debug.Log($"Buoyancy UP: {forceClamped:F4} | MAX: {maxBuoyancyForce:F4}");
+      }
+      else if (height >= startHeight + 0.1) {
+        // Object is above target height - apply downward force
+        float forceClamped = Math.Max(force_error, maxBuoyancyForce);
+        netForce = -forceClamped / 4.0f;
+
+        // Debug.Log($"Buoyancy DOWN: {netForce:F4} | MAX: {maxBuoyancyForce:F4}");
+      }
+
+      // Zero out forces!
+      // int nv = Model->nv;  // number of DoFs
+      // for (int i = 0; i < nv; i++) {
+      //     Data->qfrc_applied[i] = 0.0;
+      // }
+
+
+      // body_id: 1 # 1sub_body
+      // sf1_id: 5 # 1sfloat1
+      // sf2_id: 6 # 1sfloat2
+      // sf3_id: 7 # 1sfloat3
+      // sf4_id: 8 # 1sfloat4
+      //
+      // Hardcoded site IDs based on compiled model
+      int[] siteIds = new int[] {
+        1, // sfloat1
+        2, // sfloat2
+        3, // sfloat3
+        4  // sfloat4
+      };
+
+      // Define force and torque to apply
+      myForce = new double[3] { 0.0, 0.0, netForce }; // Apply along +Z
+      myTorque = new double[3] { 0.0, 0.0, 0.0 };
+      int bodyId = 1;
+
+      foreach (int siteId in siteIds) {
+        // Point on body: site world position
+        double* point_on_body = Data->site_xpos + 3 * siteId;
+
+        fixed (double* f = myForce)
+          fixed (double* t = myTorque) {
+            MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
+          }
+      }
+
+
+    }
+
+
+    private unsafe void OnControlCallback(object sender, MjStepArgs args) {
+      // Apply controlforces on the main thread between mj_step1 and mj_step2
+      // lock (serverSimulationLock) {
+      ApplyBuoyancyPhysics();
+      if (hasControlForces) {
+        double[] myTorque = new double[3] { 0.0, 0.0, 0.0 };
+        int bodyId = 1;
+
+        // ALL thrusters apply force along their LOCAL Z-axis
+        double[] localZDirection = new double[3] { 0, 0, 1 };
+
+        for (int j = 0; j < siteCtrlIds.Length && j < pendingControlForces.Length; j++) {
+          int siteId = siteCtrlIds[j];
+          double* point_on_body = Data->site_xpos + 3 * siteId;
+
+          // Get the site's orientation matrix (3x3 rotation matrix)
+          // site_xmat contains 9 elements per site: [R00,R01,R02,R10,R11,R12,R20,R21,R22]
+          double* siteMatrix = Data->site_xmat + 9 * siteId;
+
+          // Transform LOCAL Z-axis to GLOBAL coordinates
+          // global_direction = R * local_z_direction
+          // Since we're multiplying by [0, 0, 1], we just need the third column of the rotation matrix
+          double[] globalDirection = new double[3];
+          globalDirection[0] = siteMatrix[2];  // R02
+          globalDirection[1] = siteMatrix[5];  // R12
+          globalDirection[2] = siteMatrix[8];  // R22
+
+          // Scale by the force magnitude for THIS specific thruster
+          double forceMagnitude = pendingControlForces[j];
+          double[] globalForce = new double[3] {
+            globalDirection[0] * forceMagnitude,
+            globalDirection[1] * forceMagnitude,
+            globalDirection[2] * forceMagnitude
+          };
+
+          ArrowControllers[j].SetLength(0.02f*(float)forceMagnitude);
+          Debug.Log($"forceMagnitude: {(float)forceMagnitude}");
+
+          fixed (double* f = globalForce)
+            fixed (double* t = myTorque) {
+              MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
+            }
+        }
+
+        hasControlForces = false; // Clear the flag
+        Debug.Log("Applied control forces in ctrlCallback");
+      }
+      // }
+    }
+
+
+    // Updates the scene and the state of Mujoco simulation.
+    public unsafe void StepScene() {
+      if (Model == null || Data == null) {
+        throw new NullReferenceException("Failed to create Mujoco runtime.");
+      }
+      Profiler.BeginSample("MjStep");
+
+      // ZERO OUT FORCES AT THE VERY START OF EACH FRAME
+      int nv = Model->nv;
+      for (int i = 0; i < nv; i++) {
+        Data->qfrc_applied[i] = 0.0;
+      }
+
+      // Apply buoyancy physics before stepping the simulation
+      ApplyBuoyancyPhysics();
+
+      Profiler.BeginSample("MjStep.mj_step");
+      if (ctrlCallback != null){
+        MujocoLib.mj_step1(Model, Data);
+        ctrlCallback?.Invoke(this, new MjStepArgs(Model, Data));
+        MujocoLib.mj_step2(Model, Data);
+      }
+      else {
+        MujocoLib.mj_step(Model, Data);
+      }
+      Profiler.EndSample(); // MjStep.mj_step
+      CheckForPhysicsException();
+
+      Profiler.BeginSample("MjStep.OnSyncState");
+      SyncUnityToMjState();
+      Profiler.EndSample(); // MjStep.OnSyncState
+      Profiler.EndSample(); // MjStep
+    }
+
+    private unsafe void CheckForPhysicsException() {
+      if (Data->warning0.number > 0) {
+        Data->warning0.number = 0;
+        throw new PhysicsRuntimeException("INERTIA: (Near-) Singular inertia matrix.");
+      }
+      if (Data->warning1.number > 0) {
+        Data->warning1.number = 0;
+        throw new PhysicsRuntimeException($"CONTACTFULL: nconmax {Model->nconmax} isn't sufficient.");
+      }
+      if (Data->warning2.number > 0) {
+        Data->warning2.number = 0;
+        throw new PhysicsRuntimeException("CNSTRFULL: njmax {Model.njmax} isn't sufficient.");
+      }
+      if (Data->warning3.number > 0) {
+        Data->warning3.number = 0;
+        throw new PhysicsRuntimeException("VGEOMFULL: who constructed a mjvScene?!");
+      }
+      if (Data->warning4.number > 0) {
+        Data->warning4.number = 0;
+        throw new PhysicsRuntimeException("BADQPOS: NaN/inf in qpos.");
+      }
+      if (Data->warning5.number > 0) {
+        Data->warning5.number = 0;
+        throw new PhysicsRuntimeException("BADQVEL: NaN/inf in qvel.");
+      }
+      if (Data->warning6.number > 0) {
+        Data->warning6.number = 0;
+        throw new PhysicsRuntimeException("BADQACC: NaN/inf in qacc.");
+      }
+      if (Data->warning7.number > 0) {
+        Data->warning7.number = 0;
+        throw new PhysicsRuntimeException("BADCTRL: NaN/inf in ctrl.");
+      }
+    }
+
+    // Generate a Mujoco scene description using the specified components.
+    private XmlDocument GenerateSceneMjcf(IEnumerable<MjComponent> components) {
+      var doc = new XmlDocument();
+      var MjRoot = (XmlElement)doc.AppendChild(doc.CreateElement("mujoco"));
+
+      // Scene definition section.
+      var worldMjcf = (XmlElement)MjRoot.AppendChild(doc.CreateElement("worldbody"));
+      BuildHierarchicalMjcf(
+          doc,
+          components.Where(component =>
+            (component is MjBaseBody) ||
+            (component is MjInertial) ||
+            (component is MjBaseJoint) ||
+            (component is MjGeom) ||
+            (component is MjSite)),
+          worldMjcf);
+
+      // Non-hierarchical sections:
+      MjRoot.AppendChild(GenerateMjcfSection(
+            doc, components.Where(component => component is MjExclude), "contact"));
+
+      MjRoot.AppendChild(GenerateMjcfSection(
+            doc, components.Where(component => component is MjBaseTendon), "tendon"));
+
+      MjRoot.AppendChild(GenerateMjcfSection(
+            doc, components.Where(component => component is MjBaseConstraint), "equality"));
+
+      MjRoot.AppendChild(
+          GenerateMjcfSection(doc,
+            components.Where(component => component is MjActuator)
+            .OrderBy(component => component.transform.GetSiblingIndex()),
+            "actuator"));
+
+      MjRoot.AppendChild(
+          GenerateMjcfSection(doc,
+            components.Where(component => component is MjBaseSensor)
+            .OrderBy(component => component.transform.GetSiblingIndex()),
+            "sensor"));
+      // Generate the Mjcf of the runtime dependencies added to the context.
+      _generationContext.GenerateMjcf(MjRoot);
+      return doc;
+    }
+
+    private XmlElement GenerateMjcfSection(
+        XmlDocument doc, IEnumerable<MjComponent> components, string sectionName) {
+      var section = doc.CreateElement(sectionName);
+      foreach (var component in components) {
+        var componentMjcf = component.GenerateMjcf(_generationContext.GenerateName(component), doc);
+        section.AppendChild(componentMjcf);
+      }
+      return section;
+    }
+
+    private void BuildHierarchicalMjcf(
+        XmlDocument doc, IEnumerable<MjComponent> components, XmlElement worldMjcf) {
+      var associations = new Dictionary<MjComponent, XmlElement>();
+
+      // Build individual Mjcfs.
+      foreach (var component in components) {
+        var componentMjcf = component.GenerateMjcf(
+            _generationContext.GenerateName(component), doc);
+        // We'll use a dictionary to define associations between the components and the corresponding
+        // Mjcf elements.
+        associations.Add(component, componentMjcf);
+      }
+
+      // Connect the Mjcfs into hierarchy.
+      foreach (var component in components) {
+        var componentMjcf = associations[component];
+        var parentComponent = MjHierarchyTool.FindParentComponent(component);
+        if (parentComponent != null) {
+          var parentComponentMjcf = associations[parentComponent];
+          parentComponentMjcf.AppendChild(componentMjcf);
+        } else {
+          worldMjcf.AppendChild(componentMjcf);
+        }
+      }
+    }
+
+    // Saves an XML document to the specified file.
+    private void SaveToFile(XmlDocument document, string filePath) {
+      try {
+        using (var stream = File.Open(filePath, FileMode.Create)) {
+          using (var writer = new XmlTextWriter(stream, new UTF8Encoding(false))) {
+            writer.Formatting = Formatting.Indented;
+            document.WriteContentTo(writer);
+            Debug.Log($"MJCF saved to {filePath}");
+          }
+        }
+      } catch (IOException ex) {
+        Debug.LogWarning("Failed to save Xml to a file: " + ex.ToString(), this);
+      }
+    }
+
+    #region Socket Server Implementation
+
+    /// Starts the socket server
+    private void StartSocketServer(SocketData socketData){
+      lock (serverLock)
+      {
+        if (socketData.isRunning) return;
+
+        socketData.isRunning = true;
+        socketData.thread = new Thread(() => ServerLoop(socketData));
+        socketData.thread.IsBackground = true;
+        socketData.thread.Start();
+        Debug.Log($"{socketData.name} socket server started on {serverIpAddress}:{socketData.port}");
+
+        // No need to update the reference as we're using ref parameters
+      }
+    }
+
+    /// Stops the socket server
+    private void StopSocketServer(SocketData socketData){
+      lock (serverLock)
+      {
+        if (!socketData.isRunning) return;
+
+        socketData.isRunning = false;
+
+        try
+        {
+          if (socketData.socket != null)
+          {
+            socketData.socket.Close();
+            socketData.socket = null;
+          }
+        }
+        catch (Exception e)
+        {
+          Debug.LogError($"Error closing {socketData.name} server socket: {e.Message}");
+        }
+
+        if (socketData.thread != null)
+        {
+          socketData.thread.Join(1000);  // Wait up to 1 second for thread to terminate
+          socketData.thread = null;
+        }
+
+        Debug.Log($"{socketData.name} socket server stopped");
+
+        // No need to update the reference as we're using ref parameters
+      }
+    }
+
+    /// Main server loop
+    private void ServerLoop(SocketData socketData){
+      while (socketData.isRunning)
+      {
+        try
+        {
+          // Create and configure the socket
+          socketData.socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+          socketData.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+
+          // OPTIMIZATION: Apply socket settings at creation time
+          socketData.socket.NoDelay = true;                    // Disable Nagle's algorithm for low latency
+          socketData.socket.ReceiveBufferSize = 8192;          // Optimize OS receive buffer
+          socketData.socket.SendBufferSize = 8192;             // Optimize OS send buffer
+          socketData.socket.LingerState = new LingerOption(false, 0);  // Don't linger on close
+
+          socketData.socket.Bind(new IPEndPoint(IPAddress.Parse(serverIpAddress), socketData.port));
+          socketData.socket.Listen(30);
+
+          Debug.Log($"{socketData.name} socket server listening for connections");
+
+          // Accept and process client connections
+          while (socketData.isRunning)
+          {
+            Socket clientSocket = socketData.socket.Accept();
+            // Set client socket timeouts
+            clientSocket.ReceiveTimeout = 5000;
+            clientSocket.SendTimeout = 5000;
+
+            // ThreadPool.QueueUserWorkItem(ProcessClientRequest, clientSocket);
+            ThreadPool.QueueUserWorkItem(state => PCR2_Optimized((Socket)state), clientSocket);
+
+          }
+        }
+        catch (SocketException se)
+        {
+          if (socketData.isRunning)
+          {
+            Debug.LogError($"{socketData.name} socket error: {se.Message}");
+            Thread.Sleep(1000);  // Wait a bit before trying to restart
+          }
+        }
+        catch (Exception e)
+        {
+          if (socketData.isRunning)
+          {
+            Debug.LogError($"{socketData.name} server error: {e.Message}");
+            Thread.Sleep(1000);  // Wait a bit before trying to restart
+          }
+        } finally {
+          if (socketData.socket != null) {
+            try {
+              socketData.socket.Close();
+              socketData.socket = null;
+            }
+            catch { }
+          }
+        }
+
+        // If we're still supposed to be running, wait a bit and then restart
+        if (socketData.isRunning)
+        {
+          Debug.Log($"Attempting to restart {socketData.name} socket server...");
+          Thread.Sleep(2000);
+        }
+
+        // No need to update the reference as we're using ref parameters
+      }
+    }
+
+    // FIXED: Multi-request version of PCR2_Optimized
+    public unsafe void PCR2_Optimized(Socket clientSocket) {
+      bool isForceCommand = false;
+
+      try {
+        // Set socket timeouts for the entire session
+        clientSocket.ReceiveTimeout = 10000;  // 10 second timeout per request
+        clientSocket.SendTimeout = 5000;     // 5 second timeout for sends
+
+        Debug.Log("Client connected, starting request processing loop");
+
+        // Main request processing loop - handle multiple requests per connection
+        while (clientSocket != null && clientSocket.Connected) {
+          try {
+            // Step 1: Check if data is available using Poll (non-blocking)
+            if (!clientSocket.Poll(100000, SelectMode.SelectRead)) { // 100ms timeout
+              continue; // No data available, continue loop
+            }
+
+            // Check if socket is actually disconnected
+            if (clientSocket.Available == 0) {
+              // Peek to see if connection is closed
+              byte[] testBuffer = new byte[1];
+              if (clientSocket.Receive(testBuffer, 0, 1, SocketFlags.Peek) == 0) {
+                Debug.Log("Client disconnected gracefully");
+                break;
+              }
+            }
+
+            // Step 2: Read command (first 4 bytes) using reusable buffer
+            int commandReceived = 0;
+            DateTime startTime = DateTime.Now;
+
+            while (commandReceived < 4) {
+              if ((DateTime.Now - startTime).TotalSeconds > 5.0) {
+                Debug.LogWarning("Timeout receiving command");
+                throw new TimeoutException("Command receive timeout");
+              }
+
+              if (clientSocket.Poll(1000, SelectMode.SelectRead)) {
+                int received = clientSocket.Receive(reusableCommandBuffer, commandReceived, 4 - commandReceived, SocketFlags.None);
+                if (received == 0) {
+                  Debug.Log("Client disconnected during command receive");
+                  return; // Exit the loop and function
+                }
+                commandReceived += received;
+              } else {
+                System.Threading.Thread.Sleep(1);
+              }
+            }
+
+            // Step 3: Parse command and validate
+            float commandFloat = BitConverter.ToSingle(reusableCommandBuffer, 0);
+            int command = (int)commandFloat;
+
+            if (!System.Enum.IsDefined(typeof(MsgHeader), command)) {
+              Debug.LogError($"Invalid command received: {command}");
+              continue; // Skip this request but keep connection open
+            }
+
+            // Step 4: Lookup command info from Commands array
+            int expectedRecvBytes = 4;
+            float timeout = 1.0f;
+            string commandName = "UNKNOWN";
+            bool commandFound = false;
+
+            foreach (var cmd in Commands) {
+              if ((int)cmd.MsgHeader == command) {
+                expectedRecvBytes = cmd.ExpectedRecvBytes;
+                timeout = cmd.ExpectedTimeoutSeconds;
+                commandName = cmd.Name;
+                commandFound = true;
+                break;
+              }
+            }
+
+            if (!commandFound) {
+              Debug.LogError($"Command {command} not found in Commands array");
+              continue; // Skip this request but keep connection open
+            }
+
+            // Step 5: Read remaining data if needed using SAME reusable buffer
+            if (expectedRecvBytes > 4) {
+              int remainingBytes = expectedRecvBytes - 4;
+              int totalReceived = 0;
+              startTime = DateTime.Now;
+
+              while (totalReceived < remainingBytes) {
+                if ((DateTime.Now - startTime).TotalSeconds > timeout) {
+                  Debug.LogWarning($"Timeout receiving data for command {commandName}");
+                  throw new TimeoutException($"Data receive timeout for {commandName}");
+                }
+
+                if (clientSocket.Poll(1000, SelectMode.SelectRead)) {
+                  int received = clientSocket.Receive(reusableCommandBuffer, 4 + totalReceived, remainingBytes - totalReceived, SocketFlags.None);
+                  if (received == 0) {
+                    Debug.Log("Client disconnected during data receive");
+                    return; // Exit the loop and function
+                  }
+                  totalReceived += received;
+                } else {
+                  System.Threading.Thread.Sleep(1);
+                }
+              }
+            }
+
+            // Step 6: Convert to floats for processing
+            float[] floatsReceived = new float[expectedRecvBytes / 4];
+            Buffer.BlockCopy(reusableCommandBuffer, 0, floatsReceived, 0, expectedRecvBytes);
+
+            // Step 7: Process command
+            ProcessCommandOptimized(command, floatsReceived, clientSocket);
+
+            Debug.Log($"Successfully processed {commandName} command");
+
+          } catch (TimeoutException) {
+            Debug.LogWarning("Request timeout, closing connection");
+            break; // Exit the loop
+          } catch (SocketException se) {
+            if (se.SocketErrorCode == SocketError.ConnectionReset || 
+                se.SocketErrorCode == SocketError.ConnectionAborted) {
+              Debug.Log("Client disconnected (socket exception)");
+              Debug.LogError("Zeroing Forces");
+              ZeroOutAppliedForces();
+            } else {
+              Debug.LogError($"Socket error during request processing: {se.Message}");
+            }
+            break; // Exit the loop
+          } catch (Exception e) {
+            Debug.LogError($"Error processing individual request: {e.Message}");
+
+            try {
+              clientSocket.Send(errorResponse);
+            } catch {
+              Debug.LogError("Failed to send error response, closing connection");
+              Debug.LogError("Zeroing Forces");
+              ZeroOutAppliedForces();
+              break; // Exit the loop if we can't even send error response
+            }
+
+            // Continue the loop for other types of errors
+          }
+        }
+
+      } catch (Exception e) {
+        Debug.LogError($"Fatal error in client connection: {e.Message}");
+
+        if (isForceCommand) {
+          ZeroOutAppliedForces();
+        }
+      } finally {
+        // Only close the socket when we're done with the entire session
+        try {
+          if (clientSocket != null && clientSocket.Connected) {
+            clientSocket.Shutdown(SocketShutdown.Both);
+          }
+        } catch (Exception e) {
+          Debug.LogWarning($"Error during socket shutdown: {e.Message}");
+        } finally {
+          try {
+            clientSocket?.Close();
+            Debug.Log("Client socket closed");
+          } catch (Exception e) {
+            Debug.LogError($"Error closing client socket: {e.Message}");
+          }
+        }
+      }
+    }
+
+    // OPTIMIZATION: Centralized command processing with reused buffers
+    private unsafe void ProcessCommandOptimized(int command, float[] floatsReceived, Socket clientSocket) {
+      switch (command) {
+        case (int)MsgHeader.HEARTBEAT:
+          clientSocket.Send(heartbeatResponse); // Reused buffer
+          Debug.Log("Processed HEARTBEAT command");
+          break;
+
+        case (int)MsgHeader.GET_MODEL_INFO:
+          // Reuse modelInfoBuffer (your existing buffer)
+          float[] model_info = new float[6];
+          model_info[0] = (float)Data->time;
+          model_info[1] = (float)Model->nq;
+          model_info[2] = (float)Model->nv;
+          model_info[3] = (float)Model->na;
+          model_info[4] = (float)Model->nu;
+          model_info[5] = (float)Model->nbody;
+          Buffer.BlockCopy(model_info, 0, modelInfoBuffer, 0, modelInfoBuffer.Length);
+          clientSocket.Send(modelInfoBuffer);
+          Debug.Log("Processed GET_MODEL_INFO command");
+          break;
+
+        case (int)MsgHeader.GET_SENSORDATA:
+          int len = (int)Model->nsensordata + 1;
+          double* sourcePtr = Data->sensordata;
+
+          // Reuse your existing _sensorData and _sensorDataBytes buffers
+          for (int i = 0; i < len - 1; i++) {
+            _sensorData[i] = (float)sourcePtr[i];
+          }
+          _sensorData[len - 1] = (float)Data->time;
+          Buffer.BlockCopy(_sensorData, 0, _sensorDataBytes, 0, len * sizeof(float));
+          clientSocket.Send(_sensorDataBytes, 0, len * sizeof(float), SocketFlags.None);
+          Debug.Log($"Processed GET_SENSORDATA command, sent {len * sizeof(float)} bytes");
+          break;
+
+        case (int)MsgHeader.GET_RGB_IMAGE:
+          Debug.LogError("GET_RGB_IMAGE: Not Implemented");
+          clientSocket.Send(errorResponse); // Reused buffer
+          break;
+
+        case (int)MsgHeader.GET_MASKED_IMAGE:
+          Debug.LogError("GET_MASKED_IMAGE: Not Implemented");
+          clientSocket.Send(errorResponse); // Reused buffer
+          break;
+
+        case (int)MsgHeader.APPLY_CTRL:
+          lock (serverSimulationLock) {
+            for (int i = 0; i < 6; i++) {
+              pendingControlForces[i] = floatsReceived[2 + i];
+            }
+            hasControlForces = true;
+            pendingSteps.Enqueue((int)floatsReceived[1]); // numSteps
+            needToWaitForSendingOnSuccess = true; 
+            Debug.Log($"Processed APPLY_CTRL command with {(int)floatsReceived[1]} steps");
+          }
+          break;
+
+        case (int)MsgHeader.STEP_SIM:
+          // Process STEP_SIM command
+          lock (serverSimulationLock) {
+            pendingSteps.Enqueue((int)floatsReceived[1]);
+            needToWaitForSendingOnSuccess = true;
+            Debug.Log($"Processed STEP_SIM command with {(floatsReceived.Length > 1 ? (int)floatsReceived[1] : 1)} steps");
+          }
+          break;
+
+        case (int)MsgHeader.RESET:
+          ZeroOutAppliedForces();
+          lock (serverSimulationLock) {
+            for (int i = 0; i < 6; i++) {
+              pendingControlForces[i] = 0;
+            }
+            hasControlForces = false;
+            pendingSteps.Enqueue((int)floatsReceived[1]);
+            needToWaitForSendingOnSuccess = true;
+            MujocoLib.mj_resetData(Model, Data);
+            bool resetSuccess = ApplyQposQvelToSim(floatsReceived);
+
+            // Send success/error response
+            byte[] response = resetSuccess ? successResponse : errorResponse;
+            Debug.Log($"Processed RESET command, success: {true}");
+          }
+          break;
+
+        default:
+          // Send help message
+          string helpMessage = GenerateHelpMessage();
+          byte[] helpBytes = System.Text.Encoding.UTF8.GetBytes(helpMessage);
+          byte[] lengthBytes = BitConverter.GetBytes(helpBytes.Length);
+          clientSocket.Send(lengthBytes);
+          clientSocket.Send(helpBytes);
+          Debug.Log($"Sent help message for unknown command: {command}");
+          break;
+
+      }
+      // WAIT FOR SIMULATION COMPLETION OUTSIDE THE SWITCH CASE  
+      if (needToWaitForSimulation) {
+        lock (serverSimulationLock) {
+          while (numSteps > 0 || pendingSteps.Count > 0) {
+            Monitor.Wait(serverSimulationLock, 100); // 100ms timeout
+          }
+        }
+
+        // Send response AFTER simulation completes
+        clientSocket.Send(successResponse);
+        Debug.Log($"Simulation completed, sent response for {stepsToWait} steps");
+        needToWaitForSendingOnSuccess = false;
+      }
+    }
+  
+    // OPTIMIZATION: Efficient socket cleanup
+    private void CloseClientSocket(Socket clientSocket) {
+      try {
+        Debug.LogError("Zeroing Forces");
+        ZeroOutAppliedForces();
+        if (clientSocket != null && clientSocket.Connected) {
+          clientSocket.Shutdown(SocketShutdown.Both);
+        }
+      } catch (Exception e) {
+        Debug.LogWarning($"Error during socket shutdown: {e.Message}");
+      } finally {
+        try {
+          clientSocket?.Close();
+        } catch (Exception e) {
+          Debug.LogError($"Error closing client socket: {e.Message}");
+        }
+      }
+    }
+
+    public unsafe void PCR1(bool isForceCommand, Socket clientSocket){
+      try
+      {
+        // Receive data from client
+        byte[] receiveBuffer = new byte[4000];
+        int bytesReceived = clientSocket.Receive(receiveBuffer);
+
+        if (bytesReceived > 0)
+        {
+          // Convert bytes to floats
+          float[] floatsReceived = new float[bytesReceived / 4];
+          Buffer.BlockCopy(receiveBuffer, 0, floatsReceived, 0, bytesReceived);
+
+          // Check if this is a force command (command 3)
+          isForceCommand = floatsReceived.Length > 0 && (int)floatsReceived[0] == 7;
+
+          // Check if this is a zero force command (all force values are zero)
+          bool isZeroForce = false;
+          if (isForceCommand && floatsReceived.Length >= 6)
+          {
+            isZeroForce = floatsReceived[3] == 0 && floatsReceived[4] == 0 && floatsReceived[5] == 0 &&
+              floatsReceived[6] == 0 && floatsReceived[7] == 0 && floatsReceived[8] == 0;
+          }
+
+          byte[] response;
+          // Process the request
+          if (floatsReceived.Length > 0) {
+            int command = (int)floatsReceived[0]; // Extract the command mode from index 0
+
+            switch (command) {
+              case (int)MsgHeader.HEARTBEAT:
+                byte[] heartbeat_buf = new byte[] { 0 }; // Zero(f) means no error
+                clientSocket.Send(heartbeat_buf);
+                break;
+
+              case (int)MsgHeader.GET_MODEL_INFO: 
+                float[] model_info = new float[6];
+                model_info[0] = (float)Data->time;           // Simulation time
+                model_info[1] = (float)Model->nq;            // Number of position coordinates
+                model_info[2] = (float)Model->nv;            // Number of velocity coordinates
+                model_info[3] = (float)Model->na;            // Number of actuator activations
+                model_info[4] = (float)Model->nu;            // Number of control inputs
+                model_info[5] = (float)Model->nbody;         // Number of bodies
+                Buffer.BlockCopy(model_info, 0, modelInfoBuffer, 0, modelInfoBuffer.Length);
+                clientSocket.Send(modelInfoBuffer);
+                break;
+
+              case (int)MsgHeader.GET_SENSORDATA:
+                int len = (int)Model->nsensordata + 1;
+                double* sourcePtr = Data->sensordata;
+                for (int i = 0; i < len - 1; i++) {
+                  _sensorData[i] = (float)sourcePtr[i];
+                }
+                _sensorData[len] = (float)Data->time;
+                Buffer.BlockCopy(_sensorData, 0, _sensorDataBytes, 0, len * sizeof(float));
+                clientSocket.Send(_sensorDataBytes, 0, len * sizeof(float), SocketFlags.None);
+                break;
+
+              case (int)MsgHeader.GET_RGB_IMAGE: // State command - Return current state
+                Debug.LogError("Not Implemented Image");
+                byte[] errorBuf = new byte[] { 1 }; // Zero(f) means no error
+                clientSocket.Send(errorBuf);
+                break;
+
+              case (int)MsgHeader.GET_MASKED_IMAGE: // State command - Return current state
+                Debug.LogError("Not Implemented Image");
+                errorBuf = new byte[] { 1 }; // Zero(f) means no error
+                clientSocket.Send(errorBuf);
+                break;
+
+              case (int)MsgHeader.APPLY_CTRL:
+                lock (serverSimulationLock) {
+                  for (int i = 0; i < 6; i++) {
+                    pendingControlForces[i] = floatsReceived[2 + i];
+                  }
+                  hasControlForces = true;
+                  if((int)floatsReceived[1] == 0){ // Make sure that atleast one step is run
+                    pendingSteps.Enqueue(1);
+                  }
+                  else{
+                    pendingSteps.Enqueue((int)floatsReceived[1]); // Run n steps
+                  }
+                }
+                byte[] reset_buf = new byte[] { 0 };
+                clientSocket.Send(reset_buf);
+                break;
+
+              case (int)MsgHeader.RESET: // Control command - Apply control inputs
+                ZeroOutAppliedForces();
+                lock (serverSimulationLock) {
+                  for (int i = 0; i < 6; i++) {
+                    pendingControlForces[i] = 0;
+                  }
+                  hasControlForces = false;
+                  pendingSteps.Enqueue((int)floatsReceived[1]); // Run a few steps after resetting sim
+                  MujocoLib.mj_resetData(Model, Data);
+                  bool resetSuccess = ApplyQposQvelToSim(floatsReceived);
+                  response = new byte[] { resetSuccess ? (byte)MsgHeader.NO_ERROR : (byte)MsgHeader.ERROR };
+
+                }
+                reset_buf = response; // Zero(f) means no error
+                clientSocket.Send(reset_buf);
+                break;
+
+              default: // Unknown command, return help message
+                {
+                  string helpMessage = GenerateHelpMessage();
+                  response = System.Text.Encoding.UTF8.GetBytes(helpMessage); 
+                  clientSocket.Send(response);
+                  break;
+                }
+            }
+          }
+
+          // If this is a zero force command, explicitly zero out forces to be sure
+          if (isForceCommand && isZeroForce)
+          {
+            ZeroOutAppliedForces();
+          }
+        }
+      }
+      catch (Exception e)
+      {
+        Debug.LogError($"Error processing client request: {e.Message}");
+        byte[] reset_buf = new byte[] { (int)MsgHeader.ERROR }; // -1.0(f) means error
+        clientSocket.Send(reset_buf);
+
+        // If there was an error and this was a force command, zero out forces for safety
+        if (isForceCommand)
+        {
+          ZeroOutAppliedForces();
+        }
+      }
+      finally
+      {
+        // FIX: Always close the client socket
+        try
+        {
+          clientSocket.Shutdown(SocketShutdown.Both);
+          clientSocket.Close();
+        }
+        catch (Exception e)
+        {
+          Debug.LogError($"Error closing client socket: {e.Message}");
+        }
+      }
+
+    }
+
+    /// Apply Start Qpos and Qvel to sim:
+    /// <pose array for sub 1 [Px,Py,Pz,Ow,Ox,Oy,Oz]>, <start vel for sub 1[Lvx,Lvy,Lvz] [Avx,Avy,Avz]>]
+    /// <TODO:pose array for sub 2 [Px,Py,Pz,Ow,Ox,Oy,Oz]>, <start vel for sub 2[Lvx,Lvy,Lvz] [Avx,Avy,Avz]>]
+    private unsafe bool ApplyQposQvelToSim(float[] floatsReceived){
+      // For sub 1
+      int offset = 2;
+      double Px = Data->qpos[0] = (double)floatsReceived[offset + 0]; // Pos
+      double Py = Data->qpos[1] = (double)floatsReceived[offset + 1];
+      double Pz = Data->qpos[2] = (double)floatsReceived[offset + 2];
+      double Ow = Data->qpos[3] = (double)floatsReceived[offset + 3]; // Orn
+      double Ox = Data->qpos[4] = (double)floatsReceived[offset + 4];
+      double Oy = Data->qpos[5] = (double)floatsReceived[offset + 5];
+      double Oz = Data->qpos[6] = (double)floatsReceived[offset + 6];
+      double xVel = Data->qvel[0] = (double)floatsReceived[offset + 7]; // LinVel
+      double yVel = Data->qvel[1] = (double)floatsReceived[offset + 8];
+      double zVel = Data->qvel[2] = (double)floatsReceived[offset + 9];
+      double angVelx = Data->qvel[3] =  (double)floatsReceived[offset + 10]; // AngVel
+      double angVely = Data->qvel[4] =  (double)floatsReceived[offset + 11];
+      double angVelz = Data->qvel[5] =  (double)floatsReceived[offset + 12];
+
+      if(false){ // TODO: Sub #2 Since SUB 2 is not implemented XML yet
+                 // For sub 2
+        offset = 14;
+        int sub2_qpos_offset = 7;
+        int sub2_qvel_offset = 6;
+        Px = Data->qpos[sub2_qpos_offset + 0] = (double)floatsReceived[offset + 0]; // Pos
+        Py = Data->qpos[sub2_qpos_offset + 1] = (double)floatsReceived[offset + 1];
+        Pz = Data->qpos[sub2_qpos_offset + 2] = (double)floatsReceived[offset + 2];
+        Ow = Data->qpos[sub2_qpos_offset + 3] = (double)floatsReceived[offset + 3]; // Orn
+        Ox = Data->qpos[sub2_qpos_offset + 4] = (double)floatsReceived[offset + 4];
+        Oy = Data->qpos[sub2_qpos_offset + 5] = (double)floatsReceived[offset + 5];
+        Oz = Data->qpos[sub2_qpos_offset + 6] = (double)floatsReceived[offset + 6];
+        xVel = Data->qvel[sub2_qvel_offset + 0] = (double)floatsReceived[offset + 7]; // LinVel
+        yVel = Data->qvel[sub2_qvel_offset + 1] = (double)floatsReceived[offset + 8];
+        zVel = Data->qvel[sub2_qvel_offset + 2] = (double)floatsReceived[offset + 8];
+        angVelx = Data->qvel[sub2_qvel_offset + 3] = (double)floatsReceived[offset + 10]; // AngVel
+        angVely = Data->qvel[sub2_qvel_offset + 4] = (double)floatsReceived[offset + 11];
+        angVelz = Data->qvel[sub2_qvel_offset + 5] = (double)floatsReceived[offset + 12];
+      }
+
+      return true;
+    }
+
+    /// Zero out all applied forces in the simulation
+    private unsafe void ZeroOutAppliedForces(){
+      if (Model == null || Data == null) return;
+
+      // Zero out qfrc_applied
+      int nv = (int)Model->nv;
+      for (int i = 0; i < nv; i++){
+        Data->qfrc_applied[i] = 0.0;
+      }
+
+      Debug.Log("Zeroed out applied forces after client disconnection");
+    }
+
+    /// Generate help string from Commands array Optimized help message
+    /// generation with known length
+    private string GenerateHelpMessage() {
+      // Pre-allocate StringBuilder with exact capacity for efficiency
+      var sb = new System.Text.StringBuilder(NetHelpMessageLength +1); // +1 for  null  termination 
+
+      sb.AppendLine("=== AVAILABLE COMMANDS ===");
+      sb.AppendLine("Reset and GET_SENSORDATA Methods include d.time");
+      sb.AppendLine("Response Codes: 0=SUCCESS, 1=ERROR");
+      sb.AppendLine();
+
+      // Iterate through the Commands array
+      for (int i = 0; i < Commands.Length; i++) {
+        var cmd = Commands[i];
+        int value = (int)cmd.MsgHeader;
+        // Format: [value.0] NAME = description
+        sb.AppendLine($"[{value}.0] {cmd.Name}:");
+        sb.AppendLine($"  {cmd.HelpString}");
+      }
+
+      sb.AppendLine("=== END COMMANDS ===");
+
+      string result = sb.ToString();
+
+      // Debug verification (can be removed in production)
+      int actualLength = System.Text.Encoding.UTF8.GetByteCount(result);
+      if (actualLength != NetHelpMessageLength) {
+        Debug.LogWarning($"Help message length mismatch! Expected: {NetHelpMessageLength}, Actual: {actualLength}");
+      }
+
+      return result;
+    }
+
+    private static int CalculateHelpMessageLength(CommandInfo[] CommandsStruct) {
+      // Use Environment.NewLine for consistency with AppendLine()
+      string header = "=== AVAILABLE COMMANDS ===" + Environment.NewLine +
+        "Reset and GET_SENSORDATA Methods include d.time" + Environment.NewLine +
+        "Response Codes: 0=SUCCESS, 1=ERROR" + Environment.NewLine +
+        Environment.NewLine;
+
+      string footer = "=== END COMMANDS ===" + Environment.NewLine;
+
+      int totalLength = System.Text.Encoding.UTF8.GetByteCount(header) + 
+        System.Text.Encoding.UTF8.GetByteCount(footer);
+
+      for (int i = 0; i < CommandsStruct.Length; i++) {
+        var cmd = CommandsStruct[i];
+        int value = (int)cmd.MsgHeader;
+
+        string commandHeader = $"[{value}.0] {cmd.Name}:" + Environment.NewLine;
+        string commandContent = $"  {cmd.HelpString}";
+
+        totalLength += System.Text.Encoding.UTF8.GetByteCount(commandHeader);
+        totalLength += System.Text.Encoding.UTF8.GetByteCount(commandContent);
+      }
+
+      return totalLength;
+    }
+
+    #endregion
+
+    /// Apply control inputs to the simulation
+    private unsafe float[] ApplyControlInputs(float[] data) {
+
+      // for (int l=3; l<data.Length; l++){
+      float []forces = {data[3], data[4],data[5],data[6],data[7],data[8]};
+      Debug.Log($"Applying Forces to motors: {data[3]},{data[4]},{data[5]},{data[6]},{data[7]},{data[8]}");
+      // }
+      lock (serverSimulationLock) {
+        for (int i = 0; i < 6; i++) {
+          pendingControlForces[i] = data[3 + i];
+        }
+        hasControlForces = true;
+      }
+
+      // Zero out forces!
+      // int nv = Model->nv;  // number of DoFs
+      // for (int i = 0; i < nv; i++) {
+      //     Data->qfrc_applied[i] = 0.0;
+      // }
+
+
+      // body_id: 1 # 1sub_body
+      // a1_id: 5 # Actuator 1
+      // a2_id: 6
+      // a3_id: 7
+      // a4_id: 8
+      // a5_id: 9
+      // a6_id: 10
+
+      /////////////////////////
+      // Hardcoded site IDs based on compiled model
+      // int[] siteIds = new int[] {
+      //     5, // a1
+      //     6, // a2
+      //     7, // a3
+      //     8,  // a4
+      //     9,  // a5
+      //     10  //a6
+      // };
+      //
+      // // Define force and torque to apply
+      // double [] myForce = new double[3] { 0.0, 0.0, 0.0}; // Apply along +Z
+      // double [] myTorque = new double[3] { 0.0, 0.0, 0.0 };
+      // int bodyId = 1;
+      // int j=0;
+      //
+      // foreach (int siteId in siteIds) {
+      //     // Point on body: site world position
+      //     double* point_on_body = Data->site_xpos + 3 * siteId;
+      //     myForce[2] = forces[j];
+      //
+      //     fixed (double* f = myForce)
+      //     fixed (double* t = myTorque) {
+      //         MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
+      //     }
+      //
+      //     j+=1; // Increment Index of data
+      // }
+      /////////////////////////
+      return new float[] { 1.0f };
+    }
+
+    /// Get current simulation state (positions, velocities)
+    private unsafe float[] GetCurrentState() {
+      int nq = (int)Model->nq;
+      int nv = (int)Model->nv;
+
+      // Create response with time, positions, and velocities
+      float[] response = new float[1 + nq + nv];
+
+      // Add time
+      response[0] = (float)Data->time;
+
+      // Add positions
+      for (int i = 0; i < nq; i++) {
+        response[1 + i] = (float)Data->qpos[i];
+      }
+
+      // Add velocities
+      for (int i = 0; i < nv; i++) {
+        response[1 + nq + i] = (float)Data->qvel[i];
+      }
+
+      return response;
+    }
+
+  }
+
+  public class MjStepArgs : EventArgs {
+    public unsafe MjStepArgs(MujocoLib.mjModel_* model, MujocoLib.mjData_* data){
+      this.model = model;
+      this.data = data;
+    }
+    public readonly unsafe MujocoLib.mjModel_* model;
+    public readonly unsafe MujocoLib.mjData_* data;
+  }
+}
