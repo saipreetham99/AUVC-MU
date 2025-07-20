@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: d93b7cae3260c05408ac5083278a8e02
+timeCreated: 1693473478
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/Runtime/DynamicEffects/Passes/HeightToNormalsPass.cs
+  uploadId: 760631

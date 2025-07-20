@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: ed4a75978e3fdcd4b90ca0ef549ad541
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Tesselation.hlsl
+  uploadId: 770287

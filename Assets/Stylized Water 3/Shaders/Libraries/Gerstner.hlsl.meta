@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: 3c34798f0964a3e42997b7f7ec3408da
+timeCreated: 1715773949
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Gerstner.hlsl
+  uploadId: 770287

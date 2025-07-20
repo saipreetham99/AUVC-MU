@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: 4b5a5513ba7907643ad9b7670a1c0aba
+timeCreated: 1710257408
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Flowmap/Flowmap.hlsl
+  uploadId: 770287

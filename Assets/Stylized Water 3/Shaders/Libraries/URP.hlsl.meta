@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 19aa2a2f5f8eea540b3c3574d7dfe2d0
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/URP.hlsl
+  uploadId: 770287

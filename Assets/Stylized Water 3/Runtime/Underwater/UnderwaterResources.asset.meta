@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 185c96ef53e9cf14bbc913f624752e24
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 11400000
+  userData: 
+  icon: {fileID: -4981542250972756107, guid: 0000000000000000d000000000000000, type: 0}
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Runtime/Underwater/UnderwaterResources.asset
+  uploadId: 772134

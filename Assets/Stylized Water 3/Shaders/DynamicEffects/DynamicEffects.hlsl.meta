@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: a70ca315885942e499abbcdc4032f2aa
+timeCreated: 1686230085
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/Shaders/DynamicEffects/DynamicEffects.hlsl
+  uploadId: 760631

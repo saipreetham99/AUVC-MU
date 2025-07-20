@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: d200c414efa119f4aa38b83f1f15d281
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Input.hlsl
+  uploadId: 770287

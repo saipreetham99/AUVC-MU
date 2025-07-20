@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 1547e00092a8c1847b40d67f29c0c299
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Prefabs/Particles/Underwater/Plankton.prefab
+  uploadId: 772134

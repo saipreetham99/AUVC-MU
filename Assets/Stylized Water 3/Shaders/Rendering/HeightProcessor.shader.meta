@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: a1cfcf2c2c8140c084fb10845093540e
+timeCreated: 1718458047
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Rendering/HeightProcessor.shader
+  uploadId: 770287

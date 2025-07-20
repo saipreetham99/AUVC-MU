@@ -1,0 +1,137 @@
+﻿// Stylized Water 3 by Staggart Creations (http://staggart.xyz)
+// COPYRIGHT PROTECTED UNDER THE UNITY ASSET STORE EULA (https://unity.com/legal/as-terms)
+//    • Copying or referencing source code for the production of new asset store, or public, content is strictly prohibited!
+//    • Uploading this file to a public repository will subject it to an automated DMCA takedown request.
+
+%asset_version%
+
+%shader_name%
+{
+    Properties
+	{
+		[HDR]_BaseColor("Deep", Color) = (0, 0.44, 0.62, 1)
+		[HDR]_ShallowColor("Shallow", Color) = (0.1, 0.9, 0.89, 0.02)
+
+		_Direction("Animation direction", Vector) = (0,-1,0,0)
+		_Speed("Speed", Float) = 1
+
+        _TranslucencyStrength("Translucency Strength", Range(0 , 3)) = 1
+		_TranslucencyExp("Translucency Exponent", Range(1 , 32)) = 4
+		_TranslucencyExp("Translucency Exponent", Range(1 , 32)) = 4
+		//_TranslucencyCurvatureMask("Translucency Curvature mask", Range(0, 1)) = 0.75
+		_TranslucencyReflectionMask("Translucency Reflection mask", Range(0, 1)) = 1
+
+        [WaveProfile] _WaveProfile("Wave Profile", 2D) = "black" {}
+
+		_WaveSpeed("Speed", Float) = 2
+		_WaveFrequency("Frequency", Float) = 1
+		_WaveHeight("Height Scale", Range(0 , 1)) = 0.15
+
+        _WaveMaxLayers("Maximum Layers", Range(1 , 64)) = 64
+		_WaveDirection("Direction", vector) = (1,1,1,1)
+		_WaveFadeDistance("Wave fade distance (Start/End)", Vector) = (150, 500, 0, 0)
+    }
+
+	SubShader
+	{
+		Tags { "RenderType" = "Transparent" "Queue" = "Transparent" }
+
+		%global_defines%
+		
+        Pass
+        {
+	        Name "Waterline"
+            //Tags { "LightMode" = "UnderwaterShading" }
+	        Tags { "LightMode" = "UniversalForwardOnly" }
+
+	        Cull Off ZWrite On ZTest Always
+	        Blend SrcAlpha OneMinusSrcAlpha
+	        
+	        HLSLPROGRAM
+
+	        #pragma vertex VertexWaterLine
+	        #pragma fragment frag
+
+	        #define _ADVANCED_SHADING 1
+
+	        #pragma multi_compile_local _ _REFRACTION
+	        #pragma multi_compile_local_fragment _ _TRANSLUCENCY
+	        #pragma multi_compile_local _ _WAVES
+	        
+	        #define _WATERLINE 1
+
+	        #include_library "../Libraries/URP.hlsl"
+	        #include_library "../Libraries/Input.hlsl"
+	        #include_library "../Libraries/Lighting.hlsl"
+
+	        //Multi-compile variants for installed extensions
+	        %multi_compile_vertex dynamic effects%
+
+	        #ifdef DYNAMIC_EFFECTS_ENABLED
+	        #include_library "../DynamicEffects/DynamicEffects.hlsl"
+	        #endif
+
+	        #include_library "UnderwaterMask.hlsl"
+	        #include_library "UnderwaterLighting.hlsl"
+
+	        float TranslucencyStrength;
+	        float TranslucencyExp;
+	        float _UnderwaterFogBrightness;
+	        
+	        #if _REFRACTION
+	        #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareOpaqueTexture.hlsl"
+	        #endif
+
+	        half4 frag(UnderwaterMaskVaryings input) : SV_Target
+	        {
+		        UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+		        
+                //return float4(0,1,0,1);
+		        float2 uv = input.uv.xy;
+
+		        float gradient = saturate(min(uv.y, 1-uv.y) * 2.0);
+
+		        float3 color = lerp(_BaseColor.rgb, _ShallowColor.rgb, gradient * 0.25);
+                float alpha = lerp(_BaseColor.a, _ShallowColor.a, gradient * 0.25);
+
+		        //View direction can be planar, since the mesh is flat on the frustrum anyway
+		        ApplyUnderwaterLighting(color, 1, UP_VECTOR, CAM_FWD);
+
+		        #if _TRANSLUCENCY
+		        float3 viewDir = normalize(_WorldSpaceCameraPos.xyz - input.positionWS.xyz);
+
+		        TranslucencyData translucencyData = PopulateTranslucencyData(_ShallowColor.rgb, _MainLightPosition.xyz, _MainLightColor.rgb, viewDir, UP_VECTOR, UP_VECTOR, 1.0, _TranslucencyStrength, 0.0, _UnderwaterSubsurfaceExponent, 0.0, true);
+
+		        translucencyData.strength *= _UnderwaterFogBrightness * _UnderwaterSubsurfaceStrength;
+		        ApplyTranslucency(translucencyData, color);
+		        #endif
+		        
+		        float2 screenPos = input.screenPos.xy / input.screenPos.w;
+		        
+	        #if _REFRACTION && _ADVANCED_SHADING
+		        float2 screenPosRef = screenPos;
+		        screenPosRef.y = 1-screenPosRef.y;
+		        screenPosRef.y += (gradient);
+		        
+		        float3 sceneColor = SampleSceneColor(screenPosRef);
+		        color.rgb = lerp(sceneColor, color.rgb, alpha);
+		        //color.rgb = sceneColor.rgb;
+	        #endif
+
+                /* Intersection fade with geometry, but isn't practical, the waterline sits on the camera lens
+		        float sceneDepth = SampleSceneDepth(screenPos );
+		        
+		        #if !UNITY_REVERSED_Z //OpenGL + Vulkan
+		        sceneDepth = 1.0 - sceneDepth;
+		        #endif
+		        
+		        float dist = 1-saturate(floor(sceneDepth / 0.5));
+		        //return float4(dist.xxx, 1.0);
+                */
+		        
+		        return float4(color.rgb, gradient);
+	        }
+	        ENDHLSL
+        }
+	}
+}

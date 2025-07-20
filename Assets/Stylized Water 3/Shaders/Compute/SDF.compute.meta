@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 0ed6fcf8ffe9497086e18655ba389d39
+timeCreated: 1718465479
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Compute/SDF.compute
+  uploadId: 770287

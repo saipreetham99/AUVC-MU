@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 0afcc47a2c6245b4b8cf8dcf11511daa
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/_Demo/DynamicEffects/Rotate360.anim
+  uploadId: 760631

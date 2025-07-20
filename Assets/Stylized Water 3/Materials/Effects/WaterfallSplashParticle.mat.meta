@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 1a75c10cf3aa33b4ba640c24b243f520
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Materials/Effects/WaterfallSplashParticle.mat
+  uploadId: 770287

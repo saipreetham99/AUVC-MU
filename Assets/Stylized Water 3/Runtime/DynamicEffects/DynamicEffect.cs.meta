@@ -1,0 +1,21 @@
+fileFormatVersion: 2
+guid: 7b186ef9a4e7cf9469ba68c0214e216e
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - renderer: {instanceID: 0}
+  - templateMaterial: {fileID: 2100000, guid: 5e29c485b162b2d4fa3a19a71685b9c2, type: 2}
+  - particleSystemRenderer: {instanceID: 0}
+  executionOrder: 0
+  icon: {fileID: 2800000, guid: ecb9e38118d69424ea7237ea0d12a79c, type: 3}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/Runtime/DynamicEffects/DynamicEffect.cs
+  uploadId: 760631

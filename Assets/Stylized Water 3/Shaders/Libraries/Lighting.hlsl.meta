@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 38853322ca865a940b928d6b89c909d4
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Lighting.hlsl
+  uploadId: 770287

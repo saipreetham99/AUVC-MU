@@ -1,0 +1,20 @@
+fileFormatVersion: 2
+guid: 4f5bfefce00aeb5479fc940fb8e61837
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - displacementNormalShader: {fileID: 4800000, guid: 1243fdf243598f542abd04a22645de7f,
+      type: 3}
+  executionOrder: 0
+  icon: {fileID: -4981542250972756107, guid: 0000000000000000d000000000000000, type: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/Runtime/DynamicEffects/RenderFeature.DynamicEffects.cs
+  uploadId: 760631

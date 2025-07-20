@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: bc7a6b3bb8994234db1fb3d0fc03345c
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Common.hlsl
+  uploadId: 770287

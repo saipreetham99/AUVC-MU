@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 46c22cecd601401a875ca4554695986f
+timeCreated: 1742810425
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Shaders/Passes/Underwater/UnderwaterMaskPass.hlsl
+  uploadId: 772134

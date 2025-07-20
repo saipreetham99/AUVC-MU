@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: af3b919304c59114196a3cca1a3ebb35
+timeCreated: 1470398566
+licenseType: Store
+NativeFormatImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Materials/Effects/Underwater/UnderwaterSunshaftParticle.mat
+  uploadId: 772134

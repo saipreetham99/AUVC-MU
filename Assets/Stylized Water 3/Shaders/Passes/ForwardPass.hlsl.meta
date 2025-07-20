@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 82e93b09a1224254f9bbb9e6bd497b58
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Passes/ForwardPass.hlsl
+  uploadId: 770287

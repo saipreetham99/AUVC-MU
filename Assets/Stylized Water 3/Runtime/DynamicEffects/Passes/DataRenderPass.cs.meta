@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: ae7613552b07d9044863acc206d5d2b7
+timeCreated: 1693473364
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/Runtime/DynamicEffects/Passes/DataRenderPass.cs
+  uploadId: 760631

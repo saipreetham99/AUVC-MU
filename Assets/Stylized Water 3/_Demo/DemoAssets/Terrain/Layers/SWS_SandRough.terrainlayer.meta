@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: baea8ec50d9b3654696bea76e276b824
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 8574412962073106934
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/_Demo/DemoAssets/Terrain/Layers/SWS_SandRough.terrainlayer
+  uploadId: 770287

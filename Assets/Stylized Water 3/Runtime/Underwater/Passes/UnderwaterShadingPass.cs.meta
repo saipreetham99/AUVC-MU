@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: ace07c2b072880348971e415c8ec523c
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {fileID: -4981542250972756107, guid: 0000000000000000d000000000000000, type: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Runtime/Underwater/Passes/UnderwaterShadingPass.cs
+  uploadId: 772134

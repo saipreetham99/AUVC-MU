@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 4ae8e86c2d8502a48b06912c2a300e21
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Prefabs/Particles/Underwater/Bubbles Particles
+    (Breathing).prefab
+  uploadId: 772134

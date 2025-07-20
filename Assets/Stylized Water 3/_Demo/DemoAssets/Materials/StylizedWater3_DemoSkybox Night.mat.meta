@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 974a27fad884ceb43921e72a11144915
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/_Demo/DemoAssets/Materials/StylizedWater3_DemoSkybox
+    Night.mat
+  uploadId: 770287

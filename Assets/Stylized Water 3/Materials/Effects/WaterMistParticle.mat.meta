@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 4089560b2567cc74a98c2e4612629903
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Materials/Effects/WaterMistParticle.mat
+  uploadId: 770287

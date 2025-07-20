@@ -1,0 +1,266 @@
+﻿// Stylized Water 3 by Staggart Creations (http://staggart.xyz)
+// COPYRIGHT PROTECTED UNDER THE UNITY ASSET STORE EULA (https://unity.com/legal/as-terms)
+//    • Copying or referencing source code for the production of new asset store, or public, content is strictly prohibited!
+//    • Uploading this file to a public repository will subject it to an automated DMCA takedown request.
+
+%asset_version%
+
+%shader_name%
+{
+    Properties
+	{
+		[HDR]_BaseColor("Deep", Color) = (0, 0.44, 0.62, 1)
+		[HDR]_ShallowColor("Shallow", Color) = (0.1, 0.9, 0.89, 0.02)
+		//_ShadowStrength("Shadow Strength", Range(0 , 1)) = 1
+
+		_Direction("Animation direction", Vector) = (0,-1,0,0)
+		_Speed("Speed", Float) = 1
+
+        _TranslucencyStrength("Translucency Strength", Range(0 , 3)) = 1
+		_TranslucencyExp("Translucency Exponent", Range(1 , 32)) = 4
+
+        _CausticsBrightness("Brightness", Float) = 2
+		_CausticsChromance("Chromance", Range(0, 1)) = 1
+		_CausticsTiling("Tiling", Float) = 0.5
+		_CausticsSpeed("Speed multiplier", Float) = 0.1
+		[NoScaleOffset][SingleLineTexture]_CausticsTex("Texture", 2D) = "black" {}
+		[Toggle] _EnableDirectionalCaustics("Directional Caustics", Float) = 0
+
+		_UnderwaterSurfaceSmoothness("Underwater Surface Smoothness", Range(0, 1)) = 0.8
+		_UnderwaterRefractionOffset("Underwater Refraction Offset", Range(0, 1)) = 0.2
+
+        [WaveProfile] _WaveProfile("Wave Profile", 2D) = "black" {}
+
+		_WaveSpeed("Speed", Float) = 2
+		_WaveFrequency("Frequency", Float) = 1
+		_WaveHeight("Height Scale", Range(0 , 1)) = 0.15
+
+        _WaveMaxLayers("Maximum Layers", Range(1 , 64)) = 64
+		_WaveDirection("Direction", vector) = (1,1,1,1)
+		_WaveFadeDistance("Wave fade distance (Start/End)", Vector) = (150, 500, 0, 0)
+    }
+
+	SubShader
+	{
+		Tags { "RenderType" = "Transparent" "Queue" = "Transparent" }
+		Cull Off ZWrite Off ZTest LEqual
+
+		%global_defines%
+		
+		Pass
+		{
+			Name "Underwater Shading"
+            //Tags { "LightMode" = "UnderwaterShading" }
+            Tags { "LightMode" = "UniversalForwardOnly" }
+            
+            Cull Off 
+			ZWrite Off //Off to enable render queue offset
+
+			//Z-test needs to be set to 'Always' to ensure that the waterline lens offset doesn't appear to clip this material
+			ZTest Always
+
+			//Traditional transparency
+	        Blend SrcAlpha OneMinusSrcAlpha, One OneMinusSrcAlpha
+
+            Stencil { Ref %stencilID% Comp Greater }
+	      
+            HLSLPROGRAM
+            %pragma_target%
+            //%pragma_renderers%
+
+		    %custom_directives%
+
+	        #pragma multi_compile_instancing
+	        #pragma instancing_options renderinglayer
+
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include_library "../Libraries/Common.hlsl"
+            #include_library "../Libraries/URP.hlsl"
+            #include_with_pragmas "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DOTS.hlsl"
+            #include_library "../Libraries/Input.hlsl"
+
+			//TODO: Store material on the Underwater Area component so that it can be serialized, which allows stripping unused variants
+            #pragma multi_compile_local_vertex _ _WAVES
+			#pragma multi_compile_local_fragment _ _ADVANCED_SHADING
+	        #pragma multi_compile_local_fragment _ _TRANSLUCENCY
+	        #pragma multi_compile_local_fragment _ _CAUSTICS
+			#pragma multi_compile_local_fragment _ _UNLIT
+            #pragma multi_compile_local_fragment _ _REFRACTION
+    	        
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+            //#pragma multi_compile_fragment _ _SHADOWS_SOFT
+    	        
+            //Multi-compile variants for installed extensions
+	        %multi_compile_vertex dynamic effects%
+
+	        #ifdef DYNAMIC_EFFECTS_ENABLED
+	        #include_library "../DynamicEffects/DynamicEffects.hlsl"
+	        #endif
+                    
+            #if _CAUSTICS
+	        #define RECONSTRUCT_WORLD_NORMAL
+	        #endif
+
+            #include_library "../Libraries/Lighting.hlsl"
+            #include_library "../Libraries/Caustics.hlsl"
+
+            #include_library "UnderwaterMask.hlsl"
+	        #include_library "UnderwaterFog.hlsl"
+	        #include_library "UnderwaterShading.hlsl"
+
+
+            #include_library "../Libraries/Common.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareOpaqueTexture.hlsl"
+
+            #pragma vertex VertexWaterLine
+            #pragma fragment Fragment
+
+            float4x4 unity_WorldToLight;
+	        float _UnderwaterCausticsStrength;
+	        
+	        TEXTURE2D_X(_SourceTex); SAMPLER(sampler_SourceTex); float4 _SourceTex_TexelSize;
+
+            //Extrapolates the position of the water plane along the view direction
+            bool WaterPlaneViewIntersection(float3 viewDir, out float3 planePosition)
+            {
+                planePosition = 0;
+
+                float waterHeight = SampleWaterLevel(_WorldSpaceCameraPos.xyz);
+                float depth = waterHeight - _WorldSpaceCameraPos.y;
+
+                //Camera's X-angle
+		        float upFactor = dot(viewDir, float3(0.0, 1.0, 0.0));
+		        float angle = (acos(upFactor) * 180.0) / PI;
+
+                if(angle < 0) return false;
+
+		        //Distance from center to water level along tangent (from known opposite length and angle)
+		        float hypotenuse = (depth / cos(DEGREES_2_RAD * angle));    
+
+		        //Intersection point with water level when traveling along the plane's tangent
+		        planePosition = _WorldSpaceCameraPos.xyz + (CAM_UP * hypotenuse);
+
+                return true;
+            }
+
+            half4 Fragment(UnderwaterMaskVaryings input) : SV_Target
+	        {
+		        UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+		        
+		        //return float4(0,1,0, 1.0);
+
+		        float2 screenPos = input.screenPos.xy / input.screenPos.w;
+		        
+		        float sceneDepth = SampleSceneDepth(screenPos);
+		        float3 positionWS = ComputeWorldSpacePosition(screenPos, sceneDepth, UNITY_MATRIX_I_VP);
+		        
+		        float3 viewDir = normalize(_WorldSpaceCameraPos.xyz - positionWS);
+		        
+		        float skyboxMask = Linear01Depth(sceneDepth, _ZBufferParams) > 0.99 ? 1 : 0;
+		        float sceneMask = 1-skyboxMask;
+		        
+		        //return float4(skyboxMask.rrr, 1);
+		        //return float4(frac(positionWS * sceneMask), 1);
+
+		        //Water density gradients
+		        float distanceDensity = ComputeDistanceXYZ(positionWS);
+		        float heightDensity = ComputeUnderwaterFogHeight(positionWS) * sceneMask;
+		        float waterDensity = ComputeDensity(distanceDensity, heightDensity);
+		        //return float4(waterDensity.xxx, 1);	
+		        
+		        float4 shadowCoords = TransformWorldToShadowCoord(positionWS);
+		        Light mainLight = GetMainLight(shadowCoords, positionWS, 0);
+		        float shadowMask = mainLight.shadowAttenuation;
+		        //return float4(shadowMask.xxx, 1.0);
+
+				float sunIntensity = saturate(length(mainLight.color.rgb));
+		        
+                #if _CAUSTICS      
+		        float causticsMask = saturate((1-heightDensity) + sceneMask * (1-waterDensity)) * shadowMask;
+
+		        float3 normalWS = UP_VECTOR;
+		        #if defined(RECONSTRUCT_WORLD_NORMAL)
+		        if(_EnableDirectionalCaustics)
+		        {
+			        normalWS = ReconstructWorldNormal(screenPos);
+		        }
+		        #endif
+		        //return float4(normalWS, 1.0);
+		        
+		        float2 causticsProjection = GetCausticsProjection(input.positionCS, mainLight.direction, positionWS.xyz, normalWS, _EnableDirectionalCaustics, causticsMask);
+		        //return float4(causticsMask.xxx, 1.0);
+		        
+		        float3 caustics = SampleCaustics(causticsProjection, (TIME * -_Direction) * _CausticsSpeed, _CausticsTiling, _CausticsChromance) * _CausticsBrightness;
+		        caustics *= _UnderwaterCausticsStrength;
+		        caustics *= causticsMask * sunIntensity;
+		        
+                #if _ADVANCED_SHADING
+		        //Fade the effect out as the sun approaches the horizon (80 to 90 degrees)
+		        half sunAngle = saturate(dot(float3(0, 1, 0), mainLight.direction.xyz));
+		        half angleMask = saturate(sunAngle * 10); /* 1.0/0.10 = 10 */
+		        caustics *= angleMask;
+                #endif
+                caustics*= 1-waterDensity;
+                #endif
+		        
+		        float4 waterColor = GetUnderwaterFogColor(_ShallowColor.rgba, _BaseColor.rgba, distanceDensity, heightDensity);
+		        //return float4(waterColor.rgb, 1.0);
+
+		        //Not using the real shadow mask, since shadows on geometry are already lit
+		        ApplyUnderwaterLighting(waterColor.rgb, 1.0, UP_VECTOR, viewDir);
+		        //return float4(waterColor.rgb, 1.0);
+
+		        #if _TRANSLUCENCY
+		        TranslucencyData translucencyData = PopulateTranslucencyData(_ShallowColor.rgb, mainLight.direction.xyz, mainLight.color.rgb, viewDir, UP_VECTOR, UP_VECTOR, 1.0, _TranslucencyStrength, 0.0, _UnderwaterSubsurfaceExponent, 0.0, true);
+		        translucencyData.strength *= (1-heightDensity);
+		        translucencyData.strength *= _UnderwaterFogBrightness * _UnderwaterSubsurfaceStrength;
+
+                //Depth test between the geometry and the water plane. Objects should occlude the light scattering
+                #if _ADVANCED_SHADING && TRANSLUCENCY_OCCLUSION
+                    float3 waterPlanePosition = 0;
+                    if(WaterPlaneViewIntersection(viewDir, waterPlanePosition))
+                    {                    
+                        float3 waterPosVS = TransformWorldToView(waterPlanePosition);
+
+                        translucencyData.strength *= saturate((waterPosVS.z - sceneDepth));
+                    }
+                #endif
+
+		        ApplyTranslucency(translucencyData, waterColor.rgb);
+				//return float4(waterColor.rgb, 1.0);
+		        #endif
+
+		        //float3 screenColor = SAMPLE_TEXTURE2D_X(_SourceTex, sampler_SourceTex, screenPos);
+                float3 screenColor = 0;
+
+            #if _REFRACTION
+		        screenColor = SampleSceneColor(screenPos);
+            #endif
+
+		        //return float4(screenColor, 1.0);
+
+				//screenColor.rgb = lerp(underwaterColor, waterColor.rgb, 1-scatterAmount);
+				screenColor.rgb = lerp(screenColor.rgb, waterColor.rgb, waterDensity);
+
+                float alpha = 1.0;
+
+                #if _CAUSTICS
+		        screenColor.rgb += caustics;
+                #endif
+
+            #if !_REFRACTION
+		        alpha = waterDensity;
+                #if _CAUSTICS
+                alpha += max(caustics.r, max(caustics.g, caustics.b));
+                #endif
+            #endif
+
+		        float4 output = float4(screenColor.rgb, alpha);
+
+		        return output;
+	        }
+
+            ENDHLSL
+		}
+	}
+}

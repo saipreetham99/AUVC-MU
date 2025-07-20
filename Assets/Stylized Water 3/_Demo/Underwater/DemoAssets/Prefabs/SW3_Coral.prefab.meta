@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: dcbe32022260f0842871fed92aa67033
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/_Demo/Underwater/DemoAssets/Prefabs/SW3_Coral.prefab
+  uploadId: 772134

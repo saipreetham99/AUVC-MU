@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 05ebdef3885046e983ec45e7afff5ab9
+timeCreated: 1721054165
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Projection.hlsl
+  uploadId: 770287

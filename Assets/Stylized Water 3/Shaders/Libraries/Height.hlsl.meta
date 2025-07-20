@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: 4453c99908d0997428446580ee1d8bd0
+timeCreated: 1701267893
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Height.hlsl
+  uploadId: 770287

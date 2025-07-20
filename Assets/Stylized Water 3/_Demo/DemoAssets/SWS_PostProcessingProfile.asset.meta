@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: e57c1aba1cf6e0c41be87c3407d99c2e
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 11400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/_Demo/DemoAssets/SWS_PostProcessingProfile.asset
+  uploadId: 770287

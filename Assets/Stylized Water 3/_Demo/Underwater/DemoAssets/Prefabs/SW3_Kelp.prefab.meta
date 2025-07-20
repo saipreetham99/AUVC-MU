@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: eae66a508f4416b4491ad01b67bdb929
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/_Demo/Underwater/DemoAssets/Prefabs/SW3_Kelp.prefab
+  uploadId: 772134

@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 768e0c28dfdbc6b429fd59518fa03f2d
+ComputeShaderImporter:
+  externalObjects: {}
+  currentAPIMask: 4
+  preprocessorOverride: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Compute/HeightSampler.compute
+  uploadId: 770287

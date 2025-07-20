@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 762e7e7f839e8f64b94faf1669178a2a
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/WaterCutoutMask.shader
+  uploadId: 770287

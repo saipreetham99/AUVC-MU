@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 675007a481fc5cf46bbaecbb76571b8f
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Prefabs/Particles/Underwater/Bubbles Particles
+    (Movement Based).prefab
+  uploadId: 772134

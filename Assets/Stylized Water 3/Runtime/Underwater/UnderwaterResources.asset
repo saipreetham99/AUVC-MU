@@ -1,0 +1,21 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: fac6ccbd860aa254982bc9fec18a396d, type: 3}
+  m_Name: UnderwaterResources
+  m_EditorClassIdentifier: 
+  underwaterShader: {fileID: -6465566751694194690, guid: d7a2e1040207a5646bfc33eafc6d0293, type: 3}
+  waterlineShader: {fileID: -6465566751694194690, guid: f3a8cb7b1dbd48642abb1071b8707794, type: 3}
+  watermaskShader: {fileID: 0}
+  postProcessShader: {fileID: -6465566751694194690, guid: 70547f43444d5b54a9143e2d52359537, type: 3}
+  distortionShader: {fileID: 4800000, guid: d301eaa951bceba429c550f38ec694dc, type: 3}
+  distortionNoise: {fileID: 2800000, guid: df83b695101792f46991aa3424c196fe, type: 3}
+  geoSphere: {fileID: -9027816566018387332, guid: 6feedc7f98f100d4baa6368b1c0d5b3f, type: 3}

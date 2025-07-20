@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: f423612c8be00ab4f9ae4c1db9675c4c
+timeCreated: 1610706660
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Shaders/Underwater/UnderwaterMask.hlsl
+  uploadId: 772134

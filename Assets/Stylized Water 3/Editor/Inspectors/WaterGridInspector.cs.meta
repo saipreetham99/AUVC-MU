@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: b340d2e902f13d1438eb157b2904daa3
+timeCreated: 1680100927
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Editor/Inspectors/WaterGridInspector.cs
+  uploadId: 770287

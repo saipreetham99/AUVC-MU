@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 56732ad3f9e0ffe4694fad9b472a843a
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 11500000, guid: 60072b568d64c40a485e0fc55012dc9f, type: 3}
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Shaders/Underwater/ShaderGraph/Sample Underwater
+    Mask.shadersubgraph
+  uploadId: 772134

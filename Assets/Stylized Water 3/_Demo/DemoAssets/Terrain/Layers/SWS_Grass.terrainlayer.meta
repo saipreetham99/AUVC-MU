@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: bdc5546cfcf40da4c90bd2e7b806e485
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 8574412962073106934
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/_Demo/DemoAssets/Terrain/Layers/SWS_Grass.terrainlayer
+  uploadId: 770287

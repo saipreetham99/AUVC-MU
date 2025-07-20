@@ -1,0 +1,24 @@
+fileFormatVersion: 2
+guid: 6408098074402d04ca3f532e32c58553
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - waterMaterial: {instanceID: 0}
+  - boxCollider: {instanceID: 0}
+  - waterLevelTransform: {instanceID: 0}
+  - underwaterResources: {fileID: 11400000, guid: 185c96ef53e9cf14bbc913f624752e24,
+      type: 2}
+  - environmentAudioMixer: {instanceID: 0}
+  executionOrder: 0
+  icon: {fileID: 2800000, guid: 3436a910f8746e14d9156000cb7e11ed, type: 3}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Runtime/Underwater/UnderwaterArea.cs
+  uploadId: 772134

@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: e6d03cdf323bbdf43a0cfb24ab918b8b
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Editor/Windows/HelpWindow.cs
+  uploadId: 770287

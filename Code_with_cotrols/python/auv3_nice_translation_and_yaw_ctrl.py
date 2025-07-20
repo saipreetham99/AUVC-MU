@@ -275,7 +275,7 @@ class AUV:
               angular_vel: np.ndarray = None,
               num_steps: int = 0) -> bool:
         """Reset simulation to specified state."""
-        
+
         # Default values
         if pose is None:
             pose = np.array([0, 0, 0, 1, 0, 0, 0])  # [px, py, pz, ow, ox, oy, oz]
@@ -283,7 +283,7 @@ class AUV:
             linear_vel = np.array([0, 0, 0])  # [vx, vy, vz]
         if angular_vel is None:
             angular_vel = np.array([0, 0, 0])  # [wx, wy, wz]
-        
+
         if len(pose) != 7:
             raise ValueError("Pose must have 7 elements [px, py, pz, ow, ox, oy, oz]")
         if len(linear_vel) != 3:
@@ -318,7 +318,7 @@ class PIDState:
     integral: float = 0.0
     
 class BlueROVController:
-    def __init__(self, auv_ip="127.0.0.1", auv_port=60001):
+    def __init__(self, auv_ip="127.0.0.1", auv_port=60001, minMaxForces = [[-100,100],[-100,100],[-100,1000],[-100,100],[-100,100],[-100,100]]):
         """Initialize the BlueROV controller with attitude stabilization"""
         
         # Initialize AUV connection
@@ -335,6 +335,14 @@ class BlueROVController:
         self.controller.init()
         
         # Force limits
+        transposed_forces = np.array(minMaxForces).T
+        self.minForce = transposed_forces[0] # Array of minimum force for each thruster
+        self.maxForce = transposed_forces[1] # Array of maximum force for each thruster
+
+        # This new variable preserves the scaling of manual joystick input, separate from the final clipping limits.
+        self.manual_force_scale = 100.0
+
+
         self.MAX_FORCE = 100.0
         self.MIN_FORCE = -100.0
         
@@ -433,8 +441,11 @@ class BlueROVController:
         self.BTN_B = 1
         self.BTN_X = 2
         self.BTN_Y = 3
-        self.BTN_BACK = 4
-        self.BTN_START = 6
+        self.BTN_VIEW = 4
+        self.BTN_MENU = 6
+        self.BTN_XBOX = 6 # Main XBox button
+        self.BTN_LEFT_STICK = 7
+        self.BTN_RIGHT_STICK = 8
         self.BTN_LB = 9
         self.BTN_RB = 10
         
@@ -539,13 +550,13 @@ class BlueROVController:
         # Process pygame events
         for event in pygame.event.get():
             if event.type == pygame.JOYBUTTONDOWN:
-                if event.button == self.BTN_START:
+                if event.button == self.BTN_MENU:
                     self.armed = not self.armed
                     print(f"\n[{'ARMED' if self.armed else 'DISARMED'}]")
                 elif event.button == self.BTN_X:
                     self.stabilization_enabled = not self.stabilization_enabled
                     print(f"\nStabilization: {'ON' if self.stabilization_enabled else 'OFF'}")
-                elif event.button == self.BTN_BACK:
+                elif event.button == self.BTN_VIEW:
                     print("\nEmergency stop!")
                     raise KeyboardInterrupt("Emergency stop button pressed")
                 
@@ -674,7 +685,7 @@ class BlueROVController:
         # Get stick inputs
         surge = -self.apply_deadzone(self.controller.get_axis(self.LEFT_STICK_Y))
         strafe = self.apply_deadzone(self.controller.get_axis(self.LEFT_STICK_X))
-        yaw_input = self.apply_deadzone(self.controller.get_axis(self.RIGHT_STICK_X))
+        yaw_input = -self.apply_deadzone(self.controller.get_axis(self.RIGHT_STICK_X))
         
         # Get trigger inputs for vertical movement
         left_trigger = self.controller.get_axis(self.LEFT_TRIGGER)
@@ -695,10 +706,9 @@ class BlueROVController:
             
         return surge, strafe, heave, yaw_input
     
-    def calculate_thruster_forces(self, surge: float, strafe: float, heave: float, 
-                                  yaw_cmd: float, stabilization_forces: np.ndarray) -> np.ndarray:
+    def calculate_thruster_forces(self, surge: float, strafe: float, heave: float, yaw_cmd: float, stabilization_forces: np.ndarray) -> np.ndarray:
         """
-        MODIFIED: Calculate forces for each thruster based on thruster configuration.
+        Calculate forces for each thruster based on thruster configuration.
         This function now correctly combines manual joystick inputs with stabilization forces.
         
         The final control output is a sum of:
@@ -726,7 +736,7 @@ class BlueROVController:
         manual_forces[5] = heave
         
         # Scale manual forces to the appropriate range
-        manual_forces *= self.MAX_FORCE
+        manual_forces *= self.manual_force_scale
         
         # 2. Initialize total forces with the complete manual command
         total_forces = manual_forces
@@ -738,7 +748,7 @@ class BlueROVController:
             total_forces += stabilization_forces
             
         # 4. Clip final forces to ensure they are within the thruster limits
-        total_forces = np.clip(total_forces, self.MIN_FORCE, self.MAX_FORCE)
+        total_forces = np.clip(total_forces, self.minForce, self.maxForce)
         
         return total_forces
 

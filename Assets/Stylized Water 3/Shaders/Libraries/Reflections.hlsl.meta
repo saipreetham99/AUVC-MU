@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: 88174d9ecc872bc4d9c1479869e92de0
+timeCreated: 1701010589
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Reflections.hlsl
+  uploadId: 770287

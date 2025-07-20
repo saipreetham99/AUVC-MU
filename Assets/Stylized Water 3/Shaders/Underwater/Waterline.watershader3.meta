@@ -1,0 +1,55 @@
+fileFormatVersion: 2
+guid: f3a8cb7b1dbd48642abb1071b8707794
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 11500000, guid: fb104378e2fbf2942ae8b66abb7a1d57, type: 3}
+  template: {instanceID: 0}
+  settings:
+    shaderName: Waterline
+    hidden: 1
+    type: 1
+    autoIntegration: 1
+    fogIntegration: 1
+    lightCookies: 0
+    additionalLightCaustics: 0
+    additionalLightTranslucency: 1
+    singleCausticsLayer: 0
+    customIncludeDirectives: []
+    additionalPasses: []
+  dependencies:
+  - Assets/Stylized Water 3/Shaders/Libraries/URP.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/Input.hlsl
+  - Assets/Stylized Water 3/Shaders/DynamicEffects/DynamicEffects.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/Common.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/Lighting.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/Caustics.hlsl
+  - Assets/Stylized Water 3/Shaders/Underwater/UnderwaterMask.hlsl
+  - Assets/Stylized Water 3/Shaders/Underwater/UnderwaterFog.hlsl
+  - Assets/Stylized Water 3/Shaders/Underwater/UnderwaterShading.hlsl
+  - Assets/Stylized Water 3/Shaders/Underwater/UnderwaterEffects.hlsl
+  configurationState:
+    underwaterRendering: 0
+    dynamicEffects: 1
+    fogIntegration:
+      name: None
+      asset: 0
+      libraryGUID: 
+      url: 
+      underwaterCompatible: 1
+      thumbnailBytes: 
+      thumbnail: {fileID: 7123690520299862052, guid: 0000000000000000d000000000000000,
+        type: 0}
+      installed: 1
+      includeWithPragmas: 1
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Shaders/Underwater/Waterline.watershader3
+  uploadId: 772134

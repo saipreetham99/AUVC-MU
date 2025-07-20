@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 7d97d5112ef446268cc17484d90e4de0
+timeCreated: 1749123526
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Runtime/Underwater/Passes/WaterlinePass.cs
+  uploadId: 772134

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 448979c6ba725c5429ee2eda043db507
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/_Demo/DemoAssets/Terrain/Layers/SWS_OceanFloorSmooth.terrainlayer
+  uploadId: 770287

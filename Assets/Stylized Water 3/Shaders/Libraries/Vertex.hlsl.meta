@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 93ab439cdc704a34d97fc4d18c37a8aa
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Vertex.hlsl
+  uploadId: 770287

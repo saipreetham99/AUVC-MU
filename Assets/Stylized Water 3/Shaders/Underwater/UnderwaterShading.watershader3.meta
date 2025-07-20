@@ -1,0 +1,62 @@
+fileFormatVersion: 2
+guid: d7a2e1040207a5646bfc33eafc6d0293
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 11500000, guid: fb104378e2fbf2942ae8b66abb7a1d57, type: 3}
+  template: {instanceID: 0}
+  settings:
+    shaderName: UnderwaterShading
+    hidden: 1
+    type: 1
+    autoIntegration: 1
+    fogIntegration: 1
+    lightCookies: 0
+    additionalLightCaustics: 0
+    additionalLightTranslucency: 1
+    singleCausticsLayer: 0
+    customIncludeDirectives:
+    - enabled: 0
+      type: 4
+      value: CAUSTICS_SINGLE_LAYER
+    - enabled: 0
+      type: 4
+      value: TRANSLUCENCY_OCCLUSION 1
+    additionalPasses: []
+  dependencies:
+  - Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/Common.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/URP.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/Input.hlsl
+  - Assets/Stylized Water 3/Shaders/DynamicEffects/DynamicEffects.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/Lighting.hlsl
+  - Assets/Stylized Water 3/Shaders/Libraries/Caustics.hlsl
+  - Assets/Stylized Water 3/Shaders/Underwater/UnderwaterMask.hlsl
+  - Assets/Stylized Water 3/Shaders/Underwater/UnderwaterFog.hlsl
+  - Assets/Stylized Water 3/Shaders/Underwater/UnderwaterShading.hlsl
+  - Packages/com.unity.render-pipelines.universal/ShaderLibrary/DeclareOpaqueTexture.hlsl
+  configurationState:
+    underwaterRendering: 0
+    dynamicEffects: 1
+    fogIntegration:
+      name: None
+      asset: 0
+      libraryGUID: 
+      url: 
+      underwaterCompatible: 1
+      thumbnailBytes: 
+      thumbnail: {fileID: 7123690520299862052, guid: 0000000000000000d000000000000000,
+        type: 0}
+      installed: 1
+      includeWithPragmas: 1
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Shaders/Underwater/UnderwaterShading.watershader3
+  uploadId: 772134

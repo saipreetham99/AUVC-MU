@@ -1,0 +1,338 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 32
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: UnderwaterSunshaftParticle
+  m_Shader: {fileID: -6465566751694194690, guid: 7572eccb548628441a315ed8401cf7f8, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords:
+  - _ALPHA_FADING_FADE
+  - _FADING_ON
+  - _SURFACE_TYPE_TRANSPARENT
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 1
+  m_DoubleSidedGI: 1
+  m_CustomRenderQueue: 3002
+  stringTagMap:
+    RenderType: Transparent
+  disabledShaderPasses:
+  - MOTIONVECTORS
+  - DepthOnly
+  - SHADOWCASTER
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _Alpha:
+        m_Texture: {fileID: -804463737, guid: 9afc9fffc8d5eb04fbf46f8da66a5439, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BaseMap:
+        m_Texture: {fileID: 2800000, guid: 389d21fab092559438bd9a2122ebd0d2, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BumpMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BumpMapLarge:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _BumpMapSlope:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _CausticsTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailAlbedoMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailMask:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _DetailNormalMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _Diffuse:
+        m_Texture: {fileID: -803380585, guid: d7dd9c87a38759643b443947f2b96d7d, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _EmissionMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _FoamTex:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _FoamTexDynamic:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _IntersectionNoise:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MainTex:
+        m_Texture: {fileID: 2800000, guid: 389d21fab092559438bd9a2122ebd0d2, type: 3}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _MetallicGlossMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _OcclusionMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _ParallaxMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _PlanarReflection:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _SpecGlossMap:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _WaveProfile:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _node_2965:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _texcoord:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_Lightmaps:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_LightmapsInd:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - unity_ShadowMasks:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints: []
+    m_Floats:
+    - Vector1_1FFEA4D9: 30
+    - Vector1_3CCCBC2A: 0.028
+    - Vector1_3F7A129E: 10
+    - _ALPHA_FADING: 0
+    - _AlphaClip: 0
+    - _AlphaToMask: 0
+    - _Blend: 2
+    - _BlendModePreserveSpecular: 0
+    - _BlendOp: 0
+    - _BumpScale: 1
+    - _CameraFadingEnabled: 0
+    - _CameraFarFadeDistance: 0
+    - _CameraNearFadeDistance: 0
+    - _CastShadows: 0
+    - _CausticsBrightness: 2
+    - _CausticsChromance: 1
+    - _CausticsDistortion: 0.15
+    - _CausticsOn: 1
+    - _CausticsSpeed: 0.1
+    - _CausticsTiling: 0.5
+    - _ColorAbsorption: 0
+    - _ColorMode: 0
+    - _Cull: 0
+    - _Cutoff: 0.5
+    - _Density_Multiplier: 1
+    - _Depth: 30
+    - _DepthExp: 1
+    - _DepthHorizontal: 1
+    - _DepthVertical: 4
+    - _DetailNormalMapScale: 1
+    - _DisableDepthTexture: 0
+    - _Dissolve_Strength: 1
+    - _DistanceNormalsOn: 1
+    - _DistanceNormalsTiling: 0.15
+    - _DistortionBlend: 0.5
+    - _DistortionEnabled: 0
+    - _DistortionStrength: 1
+    - _DistortionStrengthScaled: 0.1
+    - _DstBlend: 1
+    - _EdgeFade: 0.1
+    - _Emission: 0
+    - _EnableDirectionalCaustics: 0
+    - _EnvironmentReflectionsOn: 1
+    - _FADING: 1
+    - _FadeDistance: 4.03
+    - _Fadedistance: 12.3
+    - _FlatShadingOn: 0
+    - _FlipbookBlending: 0
+    - _FlipbookMode: 0
+    - _FoamBaseAmount: 0
+    - _FoamBubblesSpread: 1
+    - _FoamBubblesStrength: 1
+    - _FoamClipping: 0
+    - _FoamDistortion: 0
+    - _FoamOn: 1
+    - _FoamSpeed: 0.1
+    - _FoamSpeedDynamic: 0.1
+    - _FoamStrength: 1
+    - _FoamSubSpeed: -0.25
+    - _FoamSubSpeedDynamic: -0.1
+    - _FoamSubTiling: 0.5
+    - _FoamSubTilingDynamic: 2
+    - _FoamTilingDynamic: 0.1
+    - _Gloss: 0.5
+    - _Glossiness: 0.5
+    - _HorizonDistance: 8
+    - _IntersectionClipping: 0.5
+    - _IntersectionDistortion: 0.2
+    - _IntersectionFalloff: 0.5
+    - _IntersectionFoamOn: 1
+    - _IntersectionLength: 3
+    - _IntersectionRippleDist: 32
+    - _IntersectionRippleStrength: 0.5
+    - _IntersectionSharp: 1
+    - _IntersectionSource: 0
+    - _IntersectionSpeed: 0.1
+    - _IntersectionStyle: 1
+    - _IntersectionTiling: 0.2
+    - _Intersectionfade: 20
+    - _InvFade: 0.34
+    - _LightingOn: 1
+    - _Metallic: 0
+    - _Mode: 0
+    - _Noisesize: 0.006
+    - _NormalMapOn: 1
+    - _NormalSpeed: 1
+    - _NormalStrength: 0.135
+    - _NormalSubSpeed: -0.5
+    - _NormalSubTiling: 0.5
+    - _OcclusionStrength: 1
+    - _Opacity: 1
+    - _Parallax: 0.02
+    - _PlanarReflectionsEnabled: 0
+    - _PointSpotLightReflectionDistortion: 0.5
+    - _PointSpotLightReflectionSize: 0
+    - _PointSpotLightReflectionStrength: 10
+    - _QueueControl: 0
+    - _QueueOffset: 2
+    - _ReceiveDynamicEffects: 1
+    - _ReceiveShadows: 1
+    - _ReflectionBlur: 0
+    - _ReflectionDistortion: 0.05
+    - _ReflectionFresnel: 5
+    - _ReflectionLighting: 0
+    - _ReflectionStrength: 1
+    - _RefractionChromaticAberration: 1
+    - _RefractionOn: 1
+    - _RefractionStrength: 0.1
+    - _RiverModeOn: 0
+    - _SampleGI: 0
+    - _ShadingMode: 1
+    - _ShadowStrength: 1
+    - _SlopeAngleFalloff: 25
+    - _SlopeAngleThreshold: 15
+    - _SlopeFoam: 1
+    - _SlopeSpeed: 2
+    - _SlopeStretching: 0.5
+    - _Smoothness: 0.5
+    - _SmoothnessSource: 0
+    - _SoftParticlesEnabled: 0
+    - _SoftParticlesFarFadeDistance: 5.98
+    - _SoftParticlesNearFadeDistance: 0
+    - _SparkleIntensity: 0
+    - _SparkleSize: 0.28
+    - _SpecularHighlights: 1
+    - _SpecularReflectionsOn: 1
+    - _Speed: 1
+    - _SrcBlend: 5
+    - _SunReflectionDistortion: 0.49
+    - _SunReflectionSize: 0.5
+    - _SunReflectionStrength: 10
+    - _Surface: 1
+    - _TranslucencyCurvatureMask: 0.75
+    - _TranslucencyExp: 4
+    - _TranslucencyOn: 1
+    - _TranslucencyReflectionMask: 1
+    - _TranslucencyStrength: 1
+    - _TranslucencyStrengthDirect: 0.05
+    - _UVSec: 0
+    - _UnderwaterRefractionOffset: 0.2
+    - _UnderwaterSurfaceSmoothness: 0.8
+    - _Unlit: 0
+    - _VertexColorDepth: 0
+    - _VertexColorFoam: 0
+    - _VertexColorWaveFlattening: 0
+    - _Vertex_Colors: 1
+    - _WaveDistance: 0.8
+    - _WaveDistortion: 0.5
+    - _WaveHeight: 0.15
+    - _WaveMaxLayers: 64
+    - _WaveNormalStr: 0.1
+    - _WaveSpeed: 2
+    - _WaveSteepness: 0.1
+    - _WaveTint: 0
+    - _WavesOn: 0
+    - _WorkflowMode: 1
+    - _WorldSpaceUV: 1
+    - _ZClip: 1
+    - _ZTest: 4
+    - _ZWrite: 0
+    - _ZWriteControl: 0
+    - __dirty: 0
+    - _node_1319: 10
+    - _node_3718: 24.9
+    m_Colors:
+    - _BaseColor: {r: 1, g: 1, b: 1, a: 1}
+    - _BaseColorAddSubDiff: {r: 0, g: 0, b: 0, a: 0}
+    - _CameraFadeParams: {r: 0, g: Infinity, b: 0, a: 0}
+    - _Color: {r: 1, g: 1, b: 1, a: 1}
+    - _Direction: {r: 0, g: -1, b: 0, a: 0}
+    - _DistanceNormalsFadeDist: {r: 100, g: 300, b: 0, a: 0}
+    - _EmissionColor: {r: 0, g: 0, b: 0, a: 1}
+    - _FoamColor: {r: 1, g: 1, b: 1, a: 1}
+    - _FoamCrestMinMaxHeight: {r: 1, g: 2, b: 0, a: 0}
+    - _FoamTiling: {r: 0.1, g: 0.1, b: 0, a: 0}
+    - _HorizonColor: {r: 0.84, g: 1, b: 1, a: 0.15}
+    - _IntersectionColor: {r: 1, g: 1, b: 1, a: 1}
+    - _NormalTiling: {r: 0.5, g: 0.5, b: 0, a: 0}
+    - _ShallowColor: {r: 0.1, g: 0.9, b: 0.89, a: 0.02}
+    - _SoftParticleFadeParams: {r: 0, g: 0, b: 0, a: 0}
+    - _SpecColor: {r: 1, g: 1, b: 1, a: 1}
+    - _Tint: {r: 0.3679245, g: 0.35924706, b: 0.35924706, a: 1}
+    - _TintColor: {r: 1, g: 1, b: 1, a: 0.459}
+    - _WaveDirection: {r: 1, g: 1, b: 1, a: 1}
+    - _WaveFadeDistance: {r: 150, g: 500, b: 0, a: 0}
+  m_BuildTextureStacks: []
+  m_AllowLocking: 1
+--- !u!114 &5312707748364855348
+MonoBehaviour:
+  m_ObjectHideFlags: 11
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d0353a89b1f911e48b9e16bdc9f2e058, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  version: 10

@@ -27,7 +27,7 @@ using System.Xml;
 using UnityEngine;
 using UnityEngine.Profiling;
 using UnityEngine.UI;
-
+using TMPro;
 namespace Mujoco {
 
   public class PhysicsRuntimeException : Exception {
@@ -37,9 +37,15 @@ namespace Mujoco {
   [RequireComponent(typeof(SliderController))]
   public class MjScene : MonoBehaviour {
     public SliderController sliderController;
+    // private UIInputController uiController; // Debugging
+    public TMP_InputField waterSurfaceHeight;
+    public TMP_InputField forceMultiplier;
+    public TMP_InputField viscosityTextField;
+
+
     public unsafe MujocoLib.mjModel_* Model = null;
     public unsafe MujocoLib.mjData_* Data = null;
-
+    public float previousValue = 0;
     // Thread-safe storage for control forces
     private volatile bool hasControlForces = false;
     private volatile bool needToWaitForSendingOnSuccess = true; 
@@ -301,6 +307,7 @@ namespace Mujoco {
     public event EventHandler<MjStepArgs> preDestroyEvent;
 
 
+
     private void InitializeArrowControllers() {
       ArrowControllers = new List<ArrowController>();
       for (int j = 0; j < siteCtrlIds.Length; j++) {
@@ -389,9 +396,9 @@ namespace Mujoco {
     protected unsafe void Start() {
       SceneRecreationAtLateUpdateRequested = false;
       CreateScene();
-      
+       
       StartCoroutine(DeferredArrowInit());
-      // sliderController = FindObjectOfType<SliderController>();
+      // StartCoroutine(DeferredUIInit());
 
       // Register the control callback
       ctrlCallback += OnControlCallback;
@@ -418,6 +425,8 @@ namespace Mujoco {
       //   Cursor.visible = true;
       // }
       lock (serverSimulationLock) {
+        Model->opt.viscosity = 0.00009*float.Parse(viscosityTextField.text);
+
         while (pendingSteps.Count > 0) {
           numSteps += pendingSteps.Dequeue();
         }
@@ -526,6 +535,8 @@ namespace Mujoco {
       } else {
         Data = MujocoLib.mj_makeData(Model);
       }
+      // Model->opt.viscosity =0.00009;
+      
       if (Data == null) {
         throw new NullReferenceException("Model loaded but mj_makeData failed.");
       }
@@ -788,7 +799,11 @@ namespace Mujoco {
       // Physical constants
       const float water_density = 1000.0f;  // kg/m³
       const float gravity = 9.806f;         // m/s²
-      const float water_surface_height = 1.0f;  // Water surface level
+      const float _water_height = 0.2f;  // Water surface level
+      // float waterHeight_offset = uiController.WaterHeight;
+      float waterHeight_offset = float.Parse(waterSurfaceHeight.text);
+      float water_surface_height = _water_height + waterHeight_offset ;  // Water surface level
+
 
       // Vehicle dimensions
       const float height = 0.254f;    // 10 inches - height of buoyancy volume
@@ -892,13 +907,13 @@ namespace Mujoco {
             globalDirection[0] = siteMatrix[2];  // R02
             globalDirection[1] = siteMatrix[5];  // R12
             globalDirection[2] = siteMatrix[8];  // R22
-
+          
             // Scale by the force magnitude for THIS specific thruster
             double forceMagnitude = _currentControlForces[j];
             double[] globalForce = new double[3] {
-              globalDirection[0] * forceMagnitude,
-              globalDirection[1] * forceMagnitude,
-              globalDirection[2] * forceMagnitude
+              globalDirection[0] * forceMagnitude*float.Parse(forceMultiplier.text),
+              globalDirection[1] * forceMagnitude*float.Parse(forceMultiplier.text),
+              globalDirection[2] * forceMagnitude*float.Parse(forceMultiplier.text),
             };
 
             ArrowControllers[j].SetLength(0.02f*(float)forceMagnitude);

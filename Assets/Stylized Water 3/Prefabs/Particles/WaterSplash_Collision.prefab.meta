@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 7076e8bc57af4294aa0434b988182b41
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Prefabs/Particles/WaterSplash_Collision.prefab
+  uploadId: 770287

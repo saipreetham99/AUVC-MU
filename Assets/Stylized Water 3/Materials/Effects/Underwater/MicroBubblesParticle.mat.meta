@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 8418cbccd163d7a4a868a715432f8183
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/Materials/Effects/Underwater/MicroBubblesParticle.mat
+  uploadId: 772134

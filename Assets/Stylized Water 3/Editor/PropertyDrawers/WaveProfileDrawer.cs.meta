@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: 4d2ada3c8d25ab44ebe13baf27cd9427
+timeCreated: 1716196796
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Editor/PropertyDrawers/WaveProfileDrawer.cs
+  uploadId: 770287

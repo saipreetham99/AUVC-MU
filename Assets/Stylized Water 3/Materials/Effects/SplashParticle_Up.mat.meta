@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 77c1bbd0b1b7b5e41b44616eb7114a04
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Materials/Effects/SplashParticle_Up.mat
+  uploadId: 770287

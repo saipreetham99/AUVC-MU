@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 76d63d50bd644766b0f1ad187f4492e7
+timeCreated: 1719918895
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Editor/PropertyDrawers/HeightInterfaceDrawer.cs
+  uploadId: 770287

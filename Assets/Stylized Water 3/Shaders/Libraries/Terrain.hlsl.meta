@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 65f8cf5469d6447cb798e816e96bccb6
+timeCreated: 1718300795
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/Libraries/Terrain.hlsl
+  uploadId: 770287

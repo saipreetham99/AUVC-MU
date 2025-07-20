@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 3b99364911c19644f8afb7f5ed757403
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Runtime/PipelineUtilities.cs
+  uploadId: 770287

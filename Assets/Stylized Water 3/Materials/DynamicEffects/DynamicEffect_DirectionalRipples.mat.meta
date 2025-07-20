@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 7143d3d69c565fa40841f82c44060b54
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/Materials/DynamicEffects/DynamicEffect_DirectionalRipples.mat
+  uploadId: 760631

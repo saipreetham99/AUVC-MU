@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 19be94089b22485c91c84918737ae987
+timeCreated: 1730299736
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/Editor/DynamicEffects/ShorelineWaveSpawnerInspector.cs
+  uploadId: 760631

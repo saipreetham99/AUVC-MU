@@ -1,0 +1,80 @@
+fileFormatVersion: 2
+guid: 823f6b206953b674a9a64f9e3ec57752
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 11500000, guid: fb104378e2fbf2942ae8b66abb7a1d57, type: 3}
+  template: {instanceID: 0}
+  settings:
+    shaderName: Standard
+    hidden: 0
+    type: 0
+    autoIntegration: 1
+    fogIntegration: 1
+    lightCookies: 0
+    additionalLightCaustics: 1
+    additionalLightTranslucency: 1
+    singleCausticsLayer: 0
+    customIncludeDirectives:
+    - enabled: 1
+      type: 0
+      value: float _MyParameter;
+    - enabled: 0
+      type: 4
+      value: QUAD_NORMAL_SAMPLES
+    - enabled: 0
+      type: 4
+      value: PIXELIZE_UV
+    - enabled: 0
+      type: 4
+      value: INTERSECTION_REFRACTION
+    additionalPasses: []
+  dependencies:
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Passes/Underwater/UnderwaterMaskPass.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/URP.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Input.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Common.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Fog.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Terrain.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Waves.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Gerstner.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Lighting.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Reflections.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Refraction.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/DynamicEffects/DynamicEffects.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Underwater/UnderwaterFog.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Underwater/UnderwaterShading.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Underwater/UnderwaterMask.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Underwater/UnderwaterLighting.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Normals.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Foam.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Caustics.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Vertex.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Libraries/Tesselation.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Passes/ForwardPass.hlsl
+  - Packages/com.staggartcreations.stylizedwater3/Shaders/Passes/HeightPrePass.hlsl
+  configurationState:
+    underwaterRendering: 1
+    dynamicEffects: 1
+    fogIntegration:
+      name: Default Unity
+      asset: 1
+      libraryGUID: 
+      url: 
+      underwaterCompatible: 1
+      thumbnailBytes: 
+      thumbnail: {fileID: 7123690520299862052, guid: 0000000000000000d000000000000000,
+        type: 0}
+      installed: 1
+      includeWithPragmas: 1
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Shaders/StylizedWater3_Standard.watershader3
+  uploadId: 770287

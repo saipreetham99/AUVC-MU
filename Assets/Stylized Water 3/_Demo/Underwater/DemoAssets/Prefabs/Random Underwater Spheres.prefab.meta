@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 8a60f2a40ba3edd4a87a0814af6eef8e
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 322081
+  packageName: Underwater Rendering for Stylized Water 3 (Extension)
+  packageVersion: 3.2.3
+  assetPath: Assets/Stylized Water 3/_Demo/Underwater/DemoAssets/Prefabs/Random Underwater
+    Spheres.prefab
+  uploadId: 772134

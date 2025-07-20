@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: ca51cc01654c7e348bcc3eae6ff63108
+AssemblyDefinitionReferenceImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/_Demo/Scripts/sc.stylizedwater3.demo.runtime.asmref
+  uploadId: 770287

@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: e47e6ece236452443bf1418a01d87491
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {fileID: 148978298399363526, guid: 0000000000000000d000000000000000, type: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 287769
+  packageName: Stylized Water 3
+  packageVersion: 3.2.1
+  assetPath: Assets/Stylized Water 3/Editor/Inspectors/AlignToWaterInspector.cs
+  uploadId: 770287

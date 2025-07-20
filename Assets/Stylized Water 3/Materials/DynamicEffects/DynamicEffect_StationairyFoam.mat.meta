@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 1c0550b88d9490d4aa3b47506d0a8e4d
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 299321
+  packageName: Dynamic Effects for Stylized Water 3 (Extension)
+  packageVersion: 3.1.0
+  assetPath: Assets/Stylized Water 3/Materials/DynamicEffects/DynamicEffect_StationairyFoam.mat
+  uploadId: 760631
