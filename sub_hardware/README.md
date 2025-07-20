@@ -1,4 +1,6 @@
 ## IMU
+
+Press Reset Position after a 30 secs on the client
 ```bash
 # lan server
 python mahony_filter_server.py
@@ -24,4 +26,13 @@ python thruster_client.py
 ```
 ```bash
 python thruster_server.py
+```
+
+## Camera
+```bash
+python udp_video_client.py --client <client_ip>
+```
+```bash
+# on the sub
+python udp_video_server.py --server <server_ip>
 ```
