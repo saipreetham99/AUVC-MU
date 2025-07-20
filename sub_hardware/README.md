@@ -30,9 +30,10 @@ python thruster_server.py
 
 ## Camera
 ```bash
-python udp_video_client.py --client <client_ip>
+python udp_video_client.py --server_ip <server_ip>
+python udp_video_client_artag.py --server<server_ip>
 ```
 ```bash
 # on the sub
-python udp_video_server.py --server <server_ip>
+python udp_video_server.py --client <client_ip> --quality <quality>
 ```

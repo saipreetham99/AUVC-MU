@@ -3,10 +3,9 @@ import socket
 import struct
 import time
 import sys
+import argparse
 
-# ——— topside IP config ———
-PI_IP, UDP_PORT = "192.168.2.11", 5005
-
+# Constants
 NEUTRAL = 1500
 AMP, AMP_STEP = 100, 100
 LIGHT_OFF = 1100
@@ -53,6 +52,12 @@ def safe_shutdown(sock, addr):
 def main():
     global AMP, armed, light, last_amp, last_stat
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ip", type=str, default="192.168.2.11", help="IP address of the Pi")
+    parser.add_argument("--port", type=int, default=5005, help="UDP port")
+    args = parser.parse_args()
+
+    addr = (args.ip, args.port)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     pygame.init()
@@ -62,14 +67,13 @@ def main():
 
     pad = pygame.joystick.Joystick(0)
     pad.init()
-    print(f"Gamepad: {pad.get_name()} ➜ {PI_IP}:{UDP_PORT}")
+    print(f"Gamepad: {pad.get_name()} ➜ {args.ip}:{args.port}")
 
-    send_neutral(sock, (PI_IP, UDP_PORT))
+    send_neutral(sock, addr)
     t_next = time.time()
 
     try:
         while True:
-            # Pump events
             for e in pygame.event.get():
                 if e.type == pygame.JOYBUTTONDOWN:
                     if e.button == BTN_START:
@@ -94,34 +98,28 @@ def main():
                         last_amp = time.time()
                         print("AMP", AMP)
 
-            # Axes & input
             surge = -pad.get_axis(SURGE_AXIS)
             strafe = pad.get_axis(STRAFE_AXIS)
             heave = -pad.get_axis(HEAVE_AXIS)
             yaw = pad.get_axis(YAW_AXIS)
 
-            # Apply deadzone
             surge = 0 if abs(surge) < DEAD else surge
             strafe = 0 if abs(strafe) < DEAD else strafe
             heave = 0 if abs(heave) < DEAD else heave
             yaw = 0 if abs(yaw) < DEAD else yaw
 
-            # Override with bumpers
             rb, lb = pad.get_button(BTN_RB), pad.get_button(BTN_LB)
             if rb ^ lb:
                 yaw = 1.0 if rb else -1.0
 
-            # Safety and arming
             if REQUIRE_BACK and not pad.get_button(BTN_BACK):
                 surge = strafe = heave = yaw = 0
             if not armed:
                 surge = strafe = heave = yaw = 0
 
-            # Exit using BACK button
             if pad.get_button(BTN_BACK):
                 raise KeyboardInterrupt("Back button pressed. Exiting cleanly...")
 
-            # Motor mix
             fl = clamp(surge - strafe - yaw)
             fr = clamp(surge + strafe + yaw)
             rl = clamp(surge + strafe - yaw)
@@ -136,10 +134,9 @@ def main():
                     to_pwm(fl), to_pwm(fr), to_pwm(rl), to_pwm(rr),
                     to_pwm(v1), to_pwm(v2), light_pwm,
                 ),
-                (PI_IP, UDP_PORT),
+                addr,
             )
 
-            # Status print
             if SHOW_STATUS and time.time() - last_stat > STATUS_DT:
                 print(
                     f"[{'ARM' if armed else 'SAFE'}] "
@@ -149,7 +146,6 @@ def main():
                 )
                 last_stat = time.time()
 
-            # Frame pacing
             t_next += LOOP_DT
             delay = t_next - time.time()
             if delay > 0:
@@ -160,7 +156,7 @@ def main():
     except KeyboardInterrupt as e:
         print(f"\n{e}")
     finally:
-        safe_shutdown(sock, (PI_IP, UDP_PORT))
+        safe_shutdown(sock, addr)
 
 
 if __name__ == "__main__":
