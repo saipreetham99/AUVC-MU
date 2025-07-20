@@ -16,3 +16,12 @@ python mahony_filter_server.py --host <server_ip>
 # wifi client
 python mahony_filter_client.py --host <server_ip>
 ```
+
+## Thrusters
+
+```bash
+python thruster_client.py
+```
+```bash
+python thruster_server.py
+```
