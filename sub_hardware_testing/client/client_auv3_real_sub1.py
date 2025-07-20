@@ -338,7 +338,7 @@ if __name__ == "__main__":
     parser.add_argument("--ip", type=str, default="127.0.0.1", help="IP of the MuJoCo simulator.")
     parser.add_argument("--port", type=int, default=60001, help="Port of the MuJoCo simulator.")
     parser.add_argument("--num_steps", type=int, default=1, help="Simulator physics steps per cycle.")
-    parser.add_argument("--sub_ip", type=str, default=None, help="IP of real submarine. Enables all real-sub features.")
+    parser.add_argument("--sub_ip", type=str, default="192.168.2.11", help="IP of real submarine. Enables all real-sub features.")
     args = parser.parse_args()
     try:
         controller = BlueROVController(args.ip, args.port, args.sub_ip)
