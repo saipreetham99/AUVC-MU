@@ -1,0 +1,773 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+cam.py
+imu.py
+submarine_server.py
+thrusters.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="cam.py">
+# File: cam.py
+import cv2
+import socket
+import struct
+import time
+import threading
+import logging
+
+class CameraStreamer:
+    """
+    Captures video frames, encodes them as JPEG, splits them into chunks,
+    and streams them over UDP to a specified client.
+    """
+    def __init__(self, client_ip, port, resolution=(640, 480), quality=70, fps=24):
+        """
+        Initializes the camera streamer.
+        
+        Note: In Python, __init__ should not return a value. Instead, we set an
+        'initialized' flag to indicate success or failure.
+        """
+        self.initialized = False
+        self.cap = None
+        self.sock = None
+
+        try:
+            self.client_ip = client_ip
+            self.port = port
+            self.resolution = resolution
+            self.quality = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+            self.max_packet_size = 60000  # Max size of a UDP packet payload
+
+            self.running = False
+            self._thread = None
+            self._frame_id = 0
+            
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            
+            self.cap = cv2.VideoCapture(0)
+            if not self.cap.isOpened():
+                raise IOError("Cannot open camera. Is it connected or in use by another program?")
+                
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+            self.cap.set(cv2.CAP_PROP_FPS, fps)
+            
+            logging.info(f"Camera initialized successfully at {self.resolution} @ {fps}fps, quality={quality}")
+            self.initialized = True
+
+        except Exception as e:
+            logging.error(f"Failed to initialize CameraStreamer: {e}")
+            # Clean up any resources that might have been created
+            if self.sock:
+                self.sock.close()
+            if self.cap and self.cap.isOpened():
+                self.cap.release()
+            # self.initialized remains False
+
+    def start(self):
+        """Starts the video streaming thread."""
+        if not self.initialized:
+            logging.error("Cannot start streamer, initialization failed.")
+            return
+        if self.running:
+            logging.warning("Camera streamer is already running.")
+            return
+        self.running = True
+        self._thread = threading.Thread(target=self._stream_loop, daemon=True)
+        self._thread.start()
+        logging.info(f"Camera streaming started, sending to {self.client_ip}:{self.port}")
+
+    def stop(self):
+        """Stops the video streaming thread."""
+        self.running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join()
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+        if self.sock:
+            self.sock.close()
+        logging.info("Camera streaming stopped and resources released.")
+
+    def _stream_loop(self):
+        """The main loop for capturing and sending frames."""
+        while self.running:
+            try:
+                ret, frame = self.cap.read()
+                if not ret:
+                    logging.warning("Failed to grab frame from camera.")
+                    time.sleep(0.1)
+                    continue
+
+                # Encode the frame as JPEG
+                result, encoded_frame = cv2.imencode('.jpg', frame, self.quality)
+                if not result:
+                    continue
+
+                data = encoded_frame.tobytes()
+                data_size = len(data)
+
+                # Split data into chunks
+                num_chunks = (data_size + self.max_packet_size - 1) // self.max_packet_size
+                
+                for i in range(num_chunks):
+                    start = i * self.max_packet_size
+                    end = start + self.max_packet_size
+                    chunk = data[start:end]
+                    
+                    # Create header: Frame ID, Total Chunks, Chunk Index
+                    header = struct.pack('!HHH', self._frame_id, num_chunks, i)
+                    packet = header + chunk
+                    
+                    self.sock.sendto(packet, (self.client_ip, self.port))
+                
+                self._frame_id = (self._frame_id + 1) % 65535 # Wrap around to avoid overflow
+                
+                # Small sleep to yield CPU, actual FPS is limited by camera
+                time.sleep(1/50) 
+
+            except Exception as e:
+                logging.error(f"Error in camera stream loop: {e}")
+                # If a major error occurs, stop to prevent spamming logs
+                if not self.cap.isOpened():
+                    self.running = False
+                    break
+                time.sleep(1)
+</file>
+
+<file path="imu.py">
+# File: imu.py
+# This is a refactored version of the provided mahony_filter_server.py
+# It removes all networking and focuses on sensor fusion.
+import numpy as np
+import json
+import time
+import threading
+import os
+import logging
+from dataclasses import dataclass
+from typing import Optional
+
+try:
+    from scipy import linalg
+except ImportError:
+    logging.critical("SciPy is not installed (pip install scipy). IMU online calibration disabled.")
+    linalg = None
+
+# --- Helper Functions (copied from original) ---
+def _normalize(v):
+    norm = np.linalg.norm(v)
+    return v / norm if norm > 1e-9 else v
+
+def _q_multiply(q1, q2):
+    w1, x1, y1, z1 = q1; w2, x2, y2, z2 = q2
+    return np.array([w1*w2-x1*x2-y1*y2-z1*z2, w1*x2+x1*w2+y1*z2-z1*y2, w1*y2-x1*z2+y1*w2+z1*x2, w1*z2+x1*y2-y1*x2+z1*w2])
+
+def _q_conjugate(q): return np.array([q[0], -q[1], -q[2], -q[3]])
+
+def _q_to_dcm(q):
+    q0,q1,q2,q3=q; return np.array([[q0**2+q1**2-q2**2-q3**2, 2*(q1*q2-q0*q3), 2*(q1*q3+q0*q2)],[2*(q1*q2+q0*q3), q0**2-q1**2+q2**2-q3**2, 2*(q2*q3-q0*q1)],[2*(q1*q3-q0*q2), 2*(q2*q3+q0*q1), q0**2-q1**2-q2**2+q3**2]])
+
+def _get_q_from_acc(acc):
+    acc_n = _normalize(acc); roll = np.arctan2(acc_n[1], np.sqrt(acc_n[0]**2 + acc_n[2]**2)); pitch = np.arctan2(-acc_n[0], np.sqrt(acc_n[1]**2 + acc_n[2]**2)); cy, sy = np.cos(0), np.sin(0); cp, sp = np.cos(pitch*0.5), np.sin(pitch*0.5); cr, sr = np.cos(roll*0.5), np.sin(roll*0.5); return np.array([cr*cp*cy+sr*sp*sy, sr*cp*cy-cr*sp*sy, cr*sp*cy+sr*cp*sy, cr*cp*sy-sr*sp*cy])
+
+def _quaternion_to_euler(q):
+    q0, q1, q2, q3 = q; roll = np.arctan2(2*(q0*q1+q2*q3), 1-2*(q1**2+q2**2)); sinp = 2*(q0*q2-q3*q1); pitch = np.arcsin(np.clip(sinp, -1, 1)); yaw = np.arctan2(2*(q0*q3+q1*q2), 1-2*(q2**2+q3**2)); return (np.degrees(roll), np.degrees(pitch), np.degrees(yaw))
+
+# --- Mock Sensor Classes for Testing ---
+class MockICM:
+    def read_all(self):
+        @dataclass
+        class Accel: x: float; y: float; z: float
+        @dataclass
+        class Gyro: x: float; y: float; z: float
+        @dataclass
+        class MockData: a: Accel; g: Gyro
+        return MockData(a=Accel(x=0, y=0, z=9.81), g=Gyro(x=np.degrees(0.01), y=np.degrees(-0.02), z=np.degrees(0.03)))
+
+class MockMMC:
+    def read_data(self):
+        @dataclass
+        class MockMagData: x: float; y: float; z: float
+        return MockMagData(x=25.0, y=5.0, z=-30.0)
+
+# --- Main IMU System Components ---
+class MagnetometerCalibrator:
+    def __init__(self, cache_path, collection_size=500, fit_interval=60.0):
+        if not linalg: logging.warning("SciPy not found, MagnetometerCalibrator will not perform fitting.")
+        self.cache_path = cache_path; self.collection_size = collection_size; self.fit_interval = fit_interval
+        self.running = False; self.mag_points = []; self.hard_iron = np.zeros(3); self.soft_iron = np.eye(3)
+        self.data_lock = threading.Lock(); self._load_from_cache()
+
+    def add_point(self, mag_raw):
+        with self.data_lock:
+            if len(self.mag_points) < self.collection_size: self.mag_points.append(mag_raw)
+            else: self.mag_points[np.random.randint(0, self.collection_size)] = mag_raw
+
+    def correct(self, mag_raw): return self.soft_iron @ (mag_raw - self.hard_iron)
+
+    def _fit_ellipsoid(self):
+        if not linalg: return
+        with self.data_lock:
+            if len(self.mag_points) < 100: return
+            points = np.array(self.mag_points)
+            D = np.c_[points**2, 2*points[:,0]*points[:,1], 2*points[:,0]*points[:,2], 2*points[:,1]*points[:,2], 2*points]; v = np.ones(D.shape[0])
+            try:
+                # u = linalg.lstsq(D, v, rcond=None)[0] # This line does not work
+                u = linalg.lstsq(D, v)[0]
+                Q = np.array([[u[0],u[3],u[4]], [u[3],u[1],u[5]], [u[4],u[5],u[2]]]); b = np.array([u[6],u[7],u[8]])
+                offset = -linalg.solve(Q, b); T = linalg.cholesky(Q); scale = T.T @ T
+                if np.linalg.det(scale) < 1e-9: logging.warning("[MagCal] Unstable fit, skipping update."); return
+                self.hard_iron = offset; self.soft_iron = scale
+                logging.info(f"[MagCal] New calibration applied. Offset: {self.hard_iron}")
+                self._save_to_cache()
+            except linalg.LinAlgError: logging.warning("[MagCal] LinAlgError during fit. Skipping update.")
+
+    def calibration_loop(self):
+        self.running = True
+        logging.info("[MagCal] Online magnetometer calibration running.")
+        while self.running: time.sleep(self.fit_interval); self._fit_ellipsoid()
+
+    def _load_from_cache(self):
+        try:
+            if os.path.exists(self.cache_path):
+                with open(self.cache_path, 'r') as f: data = json.load(f)
+                if 'hard_iron' in data and 'soft_iron' in data:
+                    self.hard_iron = np.array(data['hard_iron']); self.soft_iron = np.array(data['soft_iron'])
+                    logging.info(f"[MagCal] Loaded magnetometer calibration from {self.cache_path}")
+        except Exception as e: logging.warning(f"Could not load mag cal from cache: {e}")
+
+    def _save_to_cache(self):
+        try:
+            data = {}
+            if os.path.exists(self.cache_path):
+                with open(self.cache_path, 'r') as f: data = json.load(f)
+            data['hard_iron'] = self.hard_iron.tolist(); data['soft_iron'] = self.soft_iron.tolist()
+            with open(self.cache_path, 'w') as f: json.dump(data, f, indent=4)
+        except Exception as e: logging.error(f"Could not save mag cal to cache: {e}")
+
+    def stop(self): self.running = False; logging.info("[MagCal] Saving final calibration..."); self._fit_ellipsoid()
+
+class AttitudeFilter:
+    def __init__(self, frequency=100.0, kp=17.0, ki=0.2):
+        self.q = np.array([1.0, 0.0, 0.0, 0.0]); self.bias = np.zeros(3); self.kp = kp; self.ki = ki; self.dt = 1.0 / frequency; self.gravity_ref = np.array([0.0, 0.0, 1.0])
+
+    def update(self, gyr, acc, mag):
+        acc_n, mag_n = _normalize(acc), _normalize(mag); dcm = _q_to_dcm(self.q); v_acc = dcm.T @ self.gravity_ref; error_acc = np.cross(acc_n, v_acc)
+        mag_world_est = dcm @ mag_n; b_x = np.sqrt(mag_world_est[0]**2 + mag_world_est[1]**2); b_z = mag_world_est[2]; mag_ref_world = np.array([0.0, b_x, b_z])
+        mag_ref_sensor_frame = dcm.T @ mag_ref_world; error_mag = np.cross(mag_n, mag_ref_sensor_frame); error = error_acc + error_mag
+        self.bias += -self.ki * error * self.dt; omega = gyr - self.bias + self.kp * error; q_dot = 0.5 * _q_multiply(self.q, np.array([0.0, *omega]))
+        self.q = _normalize(self.q + q_dot * self.dt); return self.q
+    
+    def set_initial_state(self, q0): self.q = np.copy(q0)
+
+class IMUSystem:
+    CACHE_FILENAME = "orientation_cache.json"
+
+    def __init__(self, kp=17.0, ki=0.2, recalibrate_on_start=False):
+        self.filter = AttitudeFilter(kp=kp, ki=ki)
+        self.mag_calibrator = MagnetometerCalibrator(cache_path=self.CACHE_FILENAME)
+        self.recalibrate = recalibrate_on_start
+        self.reference_quaternion = np.array([1.0, 0.0, 0.0, 0.0])
+        self.running = False
+        self._threads = []
+        self.latest_icm = None; self.latest_mmc = None
+        self.latest_fused_data = None
+        self.data_lock = threading.Lock(); self.reference_lock = threading.Lock()
+
+        try: from icm20602 import ICM20602; self.icm = ICM20602(); logging.info("OK: ICM20602 sensor found.")
+        except Exception: logging.warning("ICM20602 not found. Using mock sensor."); self.icm = MockICM()
+
+        try: from mmc5983 import MMC5983; self.mmc = MMC5983(); logging.info("OK: MMC5983 sensor found.")
+        except Exception: logging.warning("MMC5983 not found. Using mock sensor."); self.mmc = MockMMC()
+
+    def start(self):
+        self.running = True
+        self._threads = [
+            threading.Thread(target=self._read_icm_loop, daemon=True),
+            threading.Thread(target=self._read_mmc_loop, daemon=True),
+            threading.Thread(target=self.mag_calibrator.calibration_loop, daemon=True),
+            threading.Thread(target=self._filter_loop, daemon=True)
+        ]
+        for t in self._threads: t.start()
+        logging.info("IMU System started with all threads.")
+
+    def stop(self):
+        logging.info("Stopping IMU System...")
+        self.running = False
+        self.mag_calibrator.stop()
+        for t in self._threads:
+            if t.is_alive(): t.join(timeout=1.0)
+        logging.info("IMU System stopped.")
+
+    def reset_orientation(self):
+        with self.reference_lock, self.data_lock:
+            # Set the current *absolute* orientation as the new zero reference
+            self.reference_quaternion = np.copy(self.filter.q)
+        logging.info(f"Reference orientation tared. New zero is {self.reference_quaternion}")
+
+    def get_latest_data(self) -> Optional[dict]:
+        """Returns the most recent fused orientation data."""
+        with self.data_lock:
+            return self.latest_fused_data
+
+    def _compute_relative_quaternion(self, q_current):
+        with self.reference_lock:
+            q_ref_inv = _q_conjugate(self.reference_quaternion)
+            return _q_multiply(q_ref_inv, q_current)
+
+    def _read_icm_loop(self):
+        while self.running:
+            try:
+                d=self.icm.read_all(); ax,ay,az,gx,gy,gz=d.a.x,d.a.y,d.a.z,d.g.x,d.g.y,d.g.z
+                with self.data_lock: self.latest_icm={'ax':ax,'ay':ay,'az':az,'gx':np.radians(gx),'gy':np.radians(gy),'gz':np.radians(gz)}
+                time.sleep(0.01)
+            except Exception as e: logging.error(f"ICM20602 read error: {e}"); time.sleep(1)
+
+    def _read_mmc_loop(self):
+        while self.running:
+            try:
+                d=self.mmc.read_data(); mx,my,mz=d.x,d.y,d.z; mag_raw = np.array([mx, my, mz])
+                self.mag_calibrator.add_point(mag_raw)
+                with self.data_lock: self.latest_mmc={'mx':mx,'my':my,'mz':mz}
+                time.sleep(0.02)
+            except Exception as e: logging.error(f"MMC5983 read error: {e}"); time.sleep(1)
+
+    def _initialize_filter_state(self):
+        q0 = None
+        if not self.recalibrate:
+            try:
+                if os.path.exists(self.CACHE_FILENAME):
+                    with open(self.CACHE_FILENAME, 'r') as f: data = json.load(f)
+                    if 'q0' in data and len(data['q0']) == 4:
+                        q0 = np.array(data['q0']); logging.info("Loaded initial orientation from cache.")
+            except Exception as e: logging.warning(f"Could not load q0 from cache: {e}")
+        
+        if q0 is None:
+            logging.info("No valid orientation in cache. Place device level to initialize (3s)...")
+            time.sleep(3.0)
+            acc_readings = []
+            for _ in range(20):
+                with self.data_lock:
+                    if self.latest_icm: acc_readings.append([self.latest_icm['ax'], self.latest_icm['ay'], self.latest_icm['az']])
+                time.sleep(0.1)
+            if not acc_readings:
+                logging.error("No accelerometer data for initialization. Using default."); q0 = np.array([1.0, 0, 0, 0])
+            else:
+                acc_avg = np.mean(acc_readings, axis=0); q0 = _get_q_from_acc(acc_avg)
+                logging.info(f"Initialized with new orientation from accelerometer: {q0}")
+            try:
+                data = {}; 
+                if os.path.exists(self.CACHE_FILENAME):
+                    with open(self.CACHE_FILENAME, 'r') as f: data = json.load(f)
+                data['q0'] = q0.tolist()
+                with open(self.CACHE_FILENAME, 'w') as f: json.dump(data, f, indent=4)
+            except Exception as e: logging.error(f"Could not save initial q0 to cache: {e}")
+        
+        self.filter.set_initial_state(q0)
+        self.reset_orientation() # Set the initial reference to this q0
+
+    def _filter_loop(self):
+        logging.info("Filter loop waiting for sensor data..."); time.sleep(1)
+        self._initialize_filter_state()
+        logging.info("IMU initialization complete. Starting attitude estimation.")
+        
+        while self.running:
+            with self.data_lock: icm_data=self.latest_icm; mmc_data=self.latest_mmc
+            if icm_data and mmc_data:
+                acc_raw=np.array([icm_data['ax'], icm_data['ay'], icm_data['az']]); gyr_raw=np.array([icm_data['gx'], icm_data['gy'], icm_data['gz']]); mag_raw=np.array([mmc_data['mx'], mmc_data['my'], mmc_data['mz']])
+                mag_corrected = self.mag_calibrator.correct(mag_raw)
+                q_absolute = self.filter.update(gyr_raw, acc_raw, mag_corrected)
+                q_relative = self._compute_relative_quaternion(q_absolute)
+                roll, pitch, yaw = _quaternion_to_euler(q_relative)
+
+                with self.data_lock:
+                    self.latest_fused_data = {
+                        'timestamp': time.time(),
+                        'quaternion': q_relative.tolist(),
+                        'euler_deg': {'roll': roll, 'pitch': pitch, 'yaw': yaw}
+                    }
+            time.sleep(self.filter.dt)
+</file>
+
+<file path="submarine_server.py">
+# File: submarine_server.py
+import socket
+import threading
+import json
+import time
+import logging
+import sys
+import argparse
+import struct
+import numpy as np
+import cv2
+
+# Import our refactored modules
+import cam
+import imu
+import thrusters
+
+CONTROL_PORT = 10000        # UDP port for receiving commands
+VIDEO_PORT = 10001          # UDP port for streaming video
+IMU_PORT = 10002            # UDP port for streaming IMU data
+
+# Safety timeout in seconds. If no packet is received for this duration,
+# thrusters will be set to neutral.
+CONTROL_TIMEOUT = 0.5
+
+# Setup basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+# Create a logger for this module
+logger = logging.getLogger('SubServer')
+
+
+class SubmarineServer:
+    def __init__(self, host_ip, client_ip):
+        self.host_ip = host_ip
+        self.client_ip = client_ip
+        self.running = True
+        self.camera_system = None
+        self.imu_system = None
+        self.thruster_system = None
+        
+    def start(self):
+        """Initializes and starts all subsystems."""
+        try:
+            # --- Initialize Camera (or fallback to noise) ---
+            logger.info("--- Initializing Camera ---")
+            self.camera_system = cam.CameraStreamer(client_ip=self.client_ip, port=VIDEO_PORT)
+            if self.camera_system.initialized:
+                self.camera_system.start()
+            else:
+                logger.warning("Camera initialization failed. Falling back to noise stream.")
+                self.camera_system = None # Discard the failed object
+                threading.Thread(target=self._noise_streamer_loop, daemon=True).start()
+
+            # --- Initialize IMU ---
+            logger.info("--- Initializing IMU ---")
+            self.imu_system = imu.IMUSystem()
+            self.imu_system.start()
+            
+            time.sleep(4) # Wait for IMU to get first reading
+
+            # --- Initialize Thrusters (or continue without if failed) ---
+            logger.info("--- Initializing Thrusters ---")
+            self.thruster_system = thrusters.ThrusterController()
+            if not self.thruster_system.initialized:
+                logger.warning("Thruster controller (PCA9685) failed to initialize. The server will run without thruster control.")
+            else:
+                logger.info("Thruster controller initialized successfully.")
+
+            logger.info("--- All systems initialized. Server is ready. ---")
+
+            # Start networking threads
+            threading.Thread(target=self._udp_control_loop, daemon=True).start()
+            threading.Thread(target=self._imu_streamer_loop, daemon=True).start()
+
+        except Exception as e:
+            logger.critical(f"A critical error occurred during server startup: {e}", exc_info=True)
+            self.shutdown()
+            return
+            
+        while self.running:
+            try:
+                time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("Keyboard interrupt received.")
+                self.shutdown()
+
+    def shutdown(self):
+        """Gracefully shuts down all subsystems."""
+        if not self.running: return
+        logger.info("--- Server shutting down... ---")
+        self.running = False
+        if self.camera_system: self.camera_system.stop()
+        if self.imu_system: self.imu_system.stop()
+        # This will now call the robust safe_shutdown method
+        if self.thruster_system: self.thruster_system.safe_shutdown()
+        logger.info("--- Shutdown complete. ---")
+
+    def _noise_streamer_loop(self):
+        # This function remains the same as before
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        logger.info(f"Noise streamer started, sending to {self.client_ip}:{VIDEO_PORT}")
+        frame_id = 0
+        resolution = (640, 480); quality = [int(cv2.IMWRITE_JPEG_QUALITY), 40]; max_packet_size = 60000
+        while self.running:
+            try:
+                noise_frame = np.random.randint(0, 255, (resolution[1], resolution[0], 3), dtype=np.uint8)
+                result, encoded_frame = cv2.imencode('.jpg', noise_frame, quality)
+                if not result: continue
+                data = encoded_frame.tobytes()
+                num_chunks = (len(data) + max_packet_size - 1) // max_packet_size
+                for i in range(num_chunks):
+                    chunk = data[i * max_packet_size:(i + 1) * max_packet_size]
+                    header = struct.pack('!HHH', frame_id, num_chunks, i)
+                    udp_socket.sendto(header + chunk, (self.client_ip, VIDEO_PORT))
+                frame_id = (frame_id + 1) % 65535
+                time.sleep(1/24)
+            except Exception as e:
+                logger.error(f"Error in noise streamer loop: {e}")
+                time.sleep(1)
+        udp_socket.close()
+        logger.info("Noise streamer stopped.")
+
+    def _imu_streamer_loop(self):
+        # This function remains the same as before
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        logger.info(f"IMU data streamer started, sending to {self.client_ip}:{IMU_PORT}")
+        while self.running:
+            try:
+                data = self.imu_system.get_latest_data()
+                if data:
+                    payload = json.dumps(data).encode('utf-8')
+                    udp_socket.sendto(payload, (self.client_ip, IMU_PORT))
+                time.sleep(1/50)
+            except Exception as e:
+                logger.error(f"Error in IMU streamer loop: {e}")
+                time.sleep(1)
+        udp_socket.close()
+
+    def _udp_control_loop(self):
+        """Listens for UDP command packets and handles them."""
+        control_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        control_socket.bind((self.host_ip, CONTROL_PORT))
+        control_socket.settimeout(CONTROL_TIMEOUT)
+        logger.info(f"Control server listening on UDP {self.host_ip}:{CONTROL_PORT}")
+
+        while self.running:
+            try:
+                data, addr = control_socket.recvfrom(1024)
+                line = data.strip()
+                if not line: continue
+                msg = json.loads(line.decode('utf-8'))
+                command = msg.get('command')
+
+                if command == 'control':
+                    # Check if thruster system is available before using it
+                    if self.thruster_system and self.thruster_system.initialized:
+                        self.thruster_system.apply_control(
+                            msg['thruster_pulses'],
+                            msg['light_pulse'],
+                            0 # Duration is now handled client-side
+                        )
+                    else:
+                        # Log that the command is being ignored
+                        logger.debug("PCA9685 chip not detected! Ignoring thruster command.")
+
+                elif command == 'reset_orientation':
+                    self.imu_system.reset_orientation()
+                    logger.info(f"Rx from {addr}: Command to reset IMU orientation.")
+                else:
+                    logger.warning(f"Rx from {addr}: Unknown command '{command}'")
+
+            except socket.timeout:
+                logger.warning(f"CONTROL TIMEOUT: No packet received for {CONTROL_TIMEOUT}s. Setting thrusters to neutral.")
+                # Also check here before setting to neutral
+                if self.thruster_system and self.thruster_system.initialized:
+                    self.thruster_system.set_neutral()
+
+            except json.JSONDecodeError:
+                logger.error("Received invalid JSON from client.")
+            except Exception as e:
+                if self.running:
+                    logger.error(f"Error in UDP control loop: {e}", exc_info=True)
+        control_socket.close()
+
+if __name__ == '__main__':
+    # Setup command-line argument parser
+    parser = argparse.ArgumentParser(description="Submarine Server")
+    parser.add_argument(
+        '--host', 
+        type=str, 
+        # FIX: Changed default to '0.0.0.0' to listen on all available interfaces.
+        # This prevents the "Cannot assign requested address" error.
+        default='0.0.0.0', 
+        help='The IP address for the server to listen on. Default is 0.0.0.0 (all interfaces).'
+    )
+    parser.add_argument(
+        '--client', 
+        type=str, 
+        default='192.168.2.1', 
+        help='The IP address of the client to send data to (Client IP). Default is 192.168.2.1.'
+    )
+    args = parser.parse_args()
+
+    # Pass the parsed arguments to the server instance
+    server = SubmarineServer(host_ip=args.host, client_ip=args.client)
+    try:
+        server.start()
+    finally:
+        server.shutdown()
+
+
+# if __name__ == '__main__':
+#     parser = argparse.ArgumentParser(description="Submarine Server")
+#     parser.add_argument('--host', type=str, default='192.168.2.11', help='The IP address for the server to listen on.')
+#     parser.add_argument('--client', type=str, default='192.168.2.1', help='The IP address of the client to send data to.')
+#     args = parser.parse_args()
+#
+#     server = SubmarineServer(host_ip=args.host, client_ip=args.client)
+#     try:
+#         server.start()
+#     finally:
+#         server.shutdown()
+</file>
+
+<file path="thrusters.py">
+# File: thrusters.py
+import time
+import logging
+
+# Get a logger for this module
+logger = logging.getLogger(__name__)
+
+try:
+    from pca9685 import PCA9685
+    IS_MOCK = False
+except ImportError:
+    logger.critical("Failed to import pca9685 library. Using mock interface.")
+    IS_MOCK = True
+    # Define a mock class that accurately reflects the real library's API
+    class PCA9685:
+        def __init__(self, i2c, address=0x40): 
+            self._i2c = i2c
+            self._address = address
+            self.pwm = [0]*16
+            logger.info("Mock PCA: Initialized.")
+        def set_pwm_frequency(self, freq): 
+            logger.info(f"Mock PCA: Freq set to {freq}Hz")
+        def output_enable(self): 
+            logger.info(f"Mock PCA: Output enabled.")
+        def output_disable(self): 
+            logger.info(f"Mock PCA: Output disabled.")
+
+
+class ThrusterController:
+    """
+    Manages the PCA9685 board to control 6 thrusters and 1 light.
+    Handles safe startup and shutdown procedures and hardware failures.
+    """
+    NEUTRAL_PULSE = 1500
+    LIGHT_OFF_PULSE = 1100
+    THRUSTER_CHANNELS = range(6)
+    LIGHT_CHANNEL = 9
+
+    def __init__(self):
+        """
+        Initializes the Thruster Controller. Sets an 'initialized' flag to indicate
+        success or failure, as __init__ cannot return a value.
+        """
+        self.initialized = False
+        self.pca = None
+        
+        try:
+            logger.info("Initializing Thruster Controller (PCA9685)...")
+            
+            if IS_MOCK:
+                # The mock will always "succeed" without needing other libraries
+                self.pca = PCA9685(i2c=None)
+            else:
+                # For real hardware, we need board and busio. Import them here.
+                # If these imports fail, the except block will catch it.
+                import board
+                import busio
+                
+                i2c = busio.I2C(board.SCL, board.SDA)
+                self.pca = PCA9685(i2c)
+
+            self.pca.set_pwm_frequency(50)
+            self.set_neutral()
+            self.pca.output_enable()
+            
+            logger.info("Thruster ESCs initialized. Audible sound should occur now.")
+            self.initialized = True
+
+        except Exception as e:
+            # This will now correctly catch any error: missing pca9685, board, busio, or I2C hardware error.
+            logger.error(f"Failed to initialize Thruster Controller (PCA9685): {e}")
+            logger.warning("Thruster control will be disabled.")
+            # self.initialized remains False
+
+    def set_neutral(self):
+        """Sets all thrusters to neutral and turns off the light."""
+        if not self.initialized:
+            return
+        for ch in self.THRUSTER_CHANNELS:
+            self.pca.pwm[ch] = self.NEUTRAL_PULSE
+        self.pca.pwm[self.LIGHT_CHANNEL] = self.LIGHT_OFF_PULSE
+        time.sleep(0.05)
+
+    def apply_control(self, thruster_pulses, light_pulse, duration):
+        """Applies specified pulse values to the PCA9685 board's channels."""
+        if not self.initialized:
+            return
+            
+        if len(thruster_pulses) != 6:
+            logger.error(f"Invalid thruster pulse count: {len(thruster_pulses)}. Expected 6.")
+            return
+
+        for i, pulse in enumerate(thruster_pulses):
+            self.pca.pwm[self.THRUSTER_CHANNELS[i]] = pulse
+        
+        self.pca.pwm[self.LIGHT_CHANNEL] = light_pulse
+        time.sleep(duration)
+        
+    def safe_shutdown(self):
+        """Sets all outputs to a safe state and disables the PCA9685 driver."""
+        if not self.initialized:
+            return
+        logger.info("Executing safe thruster shutdown...")
+        self.set_neutral()
+        self.pca.output_disable()
+        logger.info("Thruster shutdown complete.")
+</file>
+
+</files>

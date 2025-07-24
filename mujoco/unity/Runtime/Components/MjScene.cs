@@ -55,7 +55,6 @@ namespace Mujoco {
     private float[] _currentControlForces = new float[6] { 0f, 0f, 0f, 0f, 0f, 0f };
 
 
-
     // Force Rendering/Force Application
     public int[] siteCtrlIds = new int[] { 5, 6, 7, 8, 9, 10 }; // a1-a6
     [SerializeField]
@@ -161,7 +160,7 @@ namespace Mujoco {
              //       " <sub2:imu.z]\n"
              " recv:[<d.time>],\n",
              4,                                               // Expected Recv Bytes
-             4069,                                            // TODO: Expected Send Bytes
+             16,                                              // Expected Send Bytes: (1ximu(quat))
              2.0f                                             // Expected Timeout
           ),
       new CommandInfo(
