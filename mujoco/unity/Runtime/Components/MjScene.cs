@@ -43,6 +43,7 @@ namespace Mujoco {
     public TMP_InputField timestepTextField;
     public TMP_InputField realtimeTextField;
     public TMP_InputField simtimeTextField;
+    public TMP_InputField distanceTextField;
 
     // Timing behaviour
     private MultiStopwatch timer = new MultiStopwatch();
@@ -377,6 +378,7 @@ namespace Mujoco {
         }
         simtimeTextField.text = Data->time.ToString("F4");
         realtimeTextField.text = ((float)timer.GetElapsedSeconds(0)).ToString("F4");
+        distanceTextField.text = ((float)Data->qpos[0]).ToString("F4");
 
         if (numSteps == 0) {
           Monitor.PulseAll(serverSimulationLock);
@@ -576,7 +578,7 @@ namespace Mujoco {
                 float effective_depth = (submersion_depth > height) ? height : submersion_depth;
                 float submerged_fraction = effective_depth / height;
                 float additional_buoyancy = max_additional_buoyancy_per_corner * submerged_fraction;
-                total_upward_force += additional_buoyancy + 2.367f ;
+                total_upward_force += additional_buoyancy + 2.467f ;
             }
             double[] myForce = new double[3] { 0.0, 0.0, total_upward_force };
             double* point_on_body = Data->site_xpos + 3 * siteIds[i];

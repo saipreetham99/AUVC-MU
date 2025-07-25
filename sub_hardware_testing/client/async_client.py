@@ -564,8 +564,8 @@ class BlueROVController:
             'roll': PIDGains(0, 0, 0),
             'pitch': PIDGains(0, 0, 0),
             'yaw': PIDGains(0, 0, 0),
-            'yaw_sim': PIDGains(1.0, 0, 0),  # Start sim at 1.0
-            'yaw_real': PIDGains(0.0, 0, 0)  # Start real at 0.0
+            'yaw_sim': PIDGains(0.1, 0, 0),  # Start sim at 1.0
+            'yaw_real': PIDGains(10550.0, 0.0, 0.0)  # Start real at 0.0
         }
         
         self.pid_states = {
@@ -608,7 +608,7 @@ class BlueROVController:
         # Control parameters
         self.DEADZONE = 0.1
         self.dt = 0.02
-        self.tuning_cooldown = 0.2
+        self.tuning_cooldown = 0.0
         self.last_tuning_time = 0.0
         
         # Performance monitoring
@@ -650,7 +650,7 @@ class BlueROVController:
         s = self.pid_states[axis]
         
         # Update integral with clamping
-        s.integral = np.clip(s.integral + error * self.dt, -10.0, 10.0)
+        s.integral = np.clip(s.integral + error * self.dt, -50.0, 50.0)
         
         # Calculate output
         output = (g.kp * error + 
@@ -660,74 +660,6 @@ class BlueROVController:
         s.prev_error = error
         
         return 0.0 if np.isnan(output) else output
-
-    def handle_button_events(self, event):
-        if event.type != pygame.JOYBUTTONDOWN:
-            return
-
-        if event.button == self.BTN_MENU:
-            self.armed = not self.armed
-            print(f"\n[{'ARMED' if self.armed else 'DISARMED'}]")
-            
-        elif event.button == self.BTN_X:
-            self.stabilization_enabled = not self.stabilization_enabled
-            stab_status = 'ON' if self.stabilization_enabled else 'OFF'
-            print(f"\nStabilization: {stab_status}")
-            
-        elif event.button == self.BTN_B:
-            self.light_on = not self.light_on
-            light_status = 'ON' if self.light_on else 'OFF'
-            print(f"\nLIGHT: {light_status}")
-            
-        elif event.button == self.BTN_MIDDLE:
-            raise KeyboardInterrupt("Emergency stop")
-            
-        elif event.button == self.BTN_LEFT_STICK:
-            print("\nResetting Orientation (Target Only)...")
-            self.target_attitude = np.array([1.0, 0.0, 0.0, 0.0])
-            
-        elif event.button == self.BTN_A:
-            print("\nSending RESET signal to Sub & Sim...")
-            self.target_attitude = np.array([1.0, 0.0, 0.0, 0.0])
-            if self.real_sub_client:
-                self.real_sub_client.send_reset_command()
-            asyncio.create_task(self.auv.reset())
-            
-        elif event.button == self.BTN_Y:
-            r, p, y_rad = self.quaternion_to_euler(self.target_attitude)
-            y_deg = np.degrees(y_rad)
-            new_y_deg = (y_deg + 10) % 360.0
-            new_y_rad = np.radians(new_y_deg)
-            self.target_attitude = self.euler_to_quaternion(r, p, new_y_rad)
-            print(f"\n🎯 Target Yaw: {new_y_deg:.1f}°")
-
-        # Handle tuning controls
-        if time.time() - self.last_tuning_time > self.tuning_cooldown:
-            tuned = False
-            
-            # UP/DOWN adjusts Real Sub Kp
-            if event.button == self.BTN_HAT_UP:
-                self.pid_gains['yaw_real'].kp += self.kp_step
-                tuned = True
-            elif event.button == self.BTN_HAT_DOWN:
-                self.pid_gains['yaw_real'].kp = max(
-                    0.0, self.pid_gains['yaw_real'].kp - self.kp_step)
-                tuned = True
-                
-            # RIGHT/LEFT adjusts Simulator Kp
-            elif event.button == self.BTN_HAT_RIGHT:
-                self.pid_gains['yaw_sim'].kp += self.kp_step
-                tuned = True
-            elif event.button == self.BTN_HAT_LEFT:
-                self.pid_gains['yaw_sim'].kp = max(
-                    0.0, self.pid_gains['yaw_sim'].kp - self.kp_step)
-                tuned = True
-
-            if tuned:
-                sim_kp = self.pid_gains['yaw_sim'].kp
-                real_kp = self.pid_gains['yaw_real'].kp
-                print(f"\n🔧 Tuned: SimKp={sim_kp:.2f}, RealKp={real_kp:.2f}")
-                self.last_tuning_time = time.time()
 
     def get_controller_input(self) -> Tuple[float, float, float, float]:
         if not self.armed:
@@ -805,8 +737,8 @@ class BlueROVController:
             stab_forces = np.array([
                 yaw_correction,   # Real sub thruster config
                 -yaw_correction,  
-                -yaw_correction,  
-                yaw_correction,   
+                yaw_correction,  
+                -yaw_correction,   
                 0,                
                 0                 
             ])
@@ -844,6 +776,7 @@ class BlueROVController:
         return np.clip(total_forces, self.minForce, self.maxForce)
 
     async def run_controller_async(self, num_steps, fwcmd, runtime):
+        self.new = 0.0
         print("🚀 Starting ASYNC controller loop. Press MENU to arm.")
         
         # Initialize visualizer and data receiver
@@ -907,10 +840,12 @@ class BlueROVController:
                             # UP/DOWN adjusts Simulator Yaw Kp
                             if e.button == self.BTN_HAT_UP:
                                 self.pid_gains['yaw_sim'].kp += self.kp_step
+                                self.new += self.kp_step
                                 tuned = True
                             elif e.button == self.BTN_HAT_DOWN:
                                 self.pid_gains['yaw_sim'].kp = max(
                                     0.0, self.pid_gains['yaw_sim'].kp - self.kp_step)
+                                self.new -= self.kp_step
                                 tuned = True
                                 
                             # LEFT/RIGHT adjusts Real Sub Yaw Kp
@@ -959,7 +894,7 @@ class BlueROVController:
 
                 # Calculate forces for both systems
                 sim_stab_f = self.calculate_stabilization_forces(current_attitude_sim, 'sim')
-                real_stab_f = self.calculate_stabilization_forces(current_attitude_real, 'real')
+                real_stab_f = self.calculate_stabilization_forces(current_attitude_real, 'real') * self.new
                 
                 sim_f = self.calculate_thruster_forces(surge, strafe, heave, yaw_cmd, 'sim', sim_stab_f)
                 real_f = self.calculate_thruster_forces(surge, strafe, heave, yaw_cmd, 'real', real_stab_f)
