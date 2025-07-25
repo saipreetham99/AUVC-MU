@@ -1,6 +1,6 @@
 <mujoco model="sub">
     <compiler angle="radian"/>
-    <option gravity='0 0 -9.806' timestep='0.001' density="1000" viscosity="0.00009" />
+    <!-- <option gravity='0 0 -9.806' timestep='0.001' density="1000" viscosity="0.00009" /> -->
 
 
     <asset>

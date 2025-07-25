@@ -46,6 +46,10 @@ class MsgHeader(Enum):  # CORRECT
     RESET = 9
 
 
+get_sensor_data_cleint_recv_bytes = 20
+ACK = 20  # bytes
+
+
 class SubmarineDataReceiverThread(threading.Thread):  # CORRECT
     def __init__(self, video_port=10001, imu_port=10002):
         super().__init__(daemon=True, name="SubmarineDataReceiver")
@@ -332,8 +336,8 @@ class AUV:  # CORRECT
 
     def get_sensor_data(self) -> Optional[dict]:
         data = struct.pack('<f', float(MsgHeader.GET_SENSORDATA.value))
-        response = self._send(data, 20)
-        if len(response) >= 20:
+        response = self._send(data, get_sensor_data_cleint_recv_bytes)
+        if len(response) >= get_sensor_data_cleint_recv_bytes:
             values = struct.unpack('<5f', response)
             return {'imu_quaternion': np.array(values[:4]), 'time': values[4]}
         return None
@@ -343,8 +347,8 @@ class AUV:  # CORRECT
             raise ValueError("Forces array must have 6 elements")
         data = struct.pack('<8f', float(
             MsgHeader.APPLY_CTRL.value), float(num_steps), *forces)
-        response = self._send(data, 20)
-        if len(response) >= 20:
+        response = self._send(data, ACK)
+        if len(response) >= ACK:
             values = struct.unpack('<5f', response)
             return {'imu_quaternion': np.array(values[:4]), 'time': values[4]}
         return None
@@ -707,15 +711,18 @@ class BlueROVController:  # CORRECT
 
         return clipped_sim_forces, clipped_real_forces
 
-    def run_controller(self, num_steps):
+    def run_controller(self, num_steps, fwsec, runtime):
         print("🚀 Starting controller loop. Press START to arm.")
         self.visualizer = CombinedVisualizer(self.data_receiver_thread)
         self.data_receiver_thread.start()
+        cmdstarttime = time.time()
 
         shutdown = False
         try:
             while not shutdown:
-                if time.time()-self.last_time < self.dt:
+                if time.time() - cmdstarttime > runtime:
+                    shutdown = True
+                if time.time() - self.last_time < self.dt:
                     time.sleep(0.002)
                     continue
                 self.last_time = time.time()
@@ -799,10 +806,14 @@ if __name__ == "__main__":
                         help="Simulator physics steps per cycle.")
     parser.add_argument("--sub_ip", type=str, default=None,
                         help="IP of real submarine.")
+    parser.add_argument("--fwsec", type=str, default=2.0,
+                        help="time duration to apply forward force")
+    parser.add_argument("--runtime", type=str, default=2.0,
+                        help="time duration to send commands")
     args = parser.parse_args()
     try:
         controller = BlueROVController(args.ip, args.port, args.sub_ip)
-        controller.run_controller(args.num_steps)
+        controller.run_controller(args.num_steps, args.fwsec, args.runtime)
     except Exception as e:
         print(f"\n[FATAL ERROR] Could not start: {e}", file=sys.stderr)
         pygame.quit()

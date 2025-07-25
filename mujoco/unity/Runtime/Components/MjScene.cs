@@ -37,18 +37,22 @@ namespace Mujoco {
   [RequireComponent(typeof(SliderController))]
   public class MjScene : MonoBehaviour {
     public SliderController sliderController;
-    // private UIInputController uiController; // Debugging
     public TMP_InputField waterSurfaceHeight;
     public TMP_InputField forceMultiplier;
     public TMP_InputField viscosityTextField;
+    public TMP_InputField timestepTextField;
+    public TMP_InputField realtimeTextField;
+    public TMP_InputField simtimeTextField;
 
+    // Timing behaviour
+    private MultiStopwatch timer = new MultiStopwatch();
 
     public unsafe MujocoLib.mjModel_* Model = null;
     public unsafe MujocoLib.mjData_* Data = null;
     public float previousValue = 0;
     // Thread-safe storage for control forces
     private volatile bool hasControlForces = false;
-    private volatile bool needToWaitForSendingOnSuccess = true; 
+    private volatile bool needToWaitForSendingOnSuccess = true;
     private readonly object serverSimulationLock = new object();
     private readonly Queue<int> pendingSteps = new Queue<int>();
     private readonly Queue<float[]> pendingControlForces = new Queue<float[]>();
@@ -74,7 +78,7 @@ namespace Mujoco {
     public int numSteps = 0;
 
     public enum MsgHeader {
-      ERROR = 0,           
+      ERROR = 0,
       NO_ERROR = 1,
       HEARTBEAT = 2,
       GET_MODEL_INFO = 3,
@@ -113,7 +117,7 @@ namespace Mujoco {
             $"<ret_only:{(int)MsgHeader.ERROR}>\n",     // Help String
             0,                                          // Expected Recv Bytes
             1,                                          // Expected Send Bytes
-            0.1f                                        // Expected Timeout 
+            0.1f                                        // Expected Timeout
           ),
       new CommandInfo(
            MsgHeader.NO_ERROR,                         // ENUM HEADER CODE
@@ -121,22 +125,22 @@ namespace Mujoco {
            $"<ret_only:{(int)MsgHeader.NO_ERROR}>\n",  // Help String
            0,                                          // Expected Recv Bytes
            1,                                          // Expected Send Bytes
-           0.1f                                        // Expected Timeout 
+           0.1f                                        // Expected Timeout
           ),
       new CommandInfo(
-            MsgHeader.HEARTBEAT,                          // ENUM HEADER CODE 
+            MsgHeader.HEARTBEAT,                          // ENUM HEADER CODE
             "HEARTBEAT",                                  // Name
             $"[send: {(int)MsgHeader.HEARTBEAT}.0f],\n"+  // Help String
              "recv: status_byte\n",
             4,                                            // Expected Recv Bytes
             1,                                            // Expected Send Bytes
-            0.1f                                          // Expected Timeout 
+            0.1f                                          // Expected Timeout
           ),
       new CommandInfo(
-            MsgHeader.GET_MODEL_INFO,                         // ENUM HEADER CODE 
+            MsgHeader.GET_MODEL_INFO,                         // ENUM HEADER CODE
             "GET_MODEL_INFO",                                 // Name
             $"[send: {(int)MsgHeader.GET_MODEL_INFO}.0f]\n,"+ // Help String
-             " recv: [<d.time>,"+                                                    
+             " recv: [<d.time>,"+
              " <m.nq>,"+
              " <m.nv>,"+
              " <m.na>,"+
@@ -144,7 +148,7 @@ namespace Mujoco {
              " <m.nbody>]\n",
             4,                                                // Expected Recv Bytes
             24,                                               // Expected Send Bytes
-            0.1f                                              // Expected Timeout 
+            0.1f                                              // Expected Timeout
           ),
       new CommandInfo(
             MsgHeader.GET_SENSORDATA,                         // ENUM HEADER CODE
@@ -160,7 +164,7 @@ namespace Mujoco {
              //       " <sub2:imu.z]\n"
              " recv:[<d.time>],\n",
              4,                                               // Expected Recv Bytes
-             16,                                              // Expected Send Bytes: (1ximu(quat))
+             20,                                              // Expected Send Bytes: 5 floats * 4 bytes/float
              2.0f                                             // Expected Timeout
           ),
       new CommandInfo(
@@ -170,7 +174,7 @@ namespace Mujoco {
              " recv: <[r][g][b] pixels, row order>]\n",
             4,                                                // Expected Recv Bytes
             4096,                                             // TODO: Expected Recv Bytes
-            2.0f                                              // Expected Timeout 
+            2.0f                                              // Expected Timeout
           ),
       new CommandInfo(
             MsgHeader.GET_MASKED_IMAGE,                         // ENUM HEADER CODE
@@ -179,7 +183,7 @@ namespace Mujoco {
              " recv: [<[r][g][b] pixels, row order>]\n",
             4,                                                  // Expected Recv Bytes
             1,                                                  // Expected Send Bytes
-            2.0f                                                // Expected Timeout 
+            2.0f                                                // Expected Timeout
           ),
       new CommandInfo(
             MsgHeader.APPLY_CTRL,                                // ENUM HEADER CODE
@@ -188,20 +192,20 @@ namespace Mujoco {
              " [idx:1]<numSteps> (Simulate n steps after "+
                                   "applying control),\n"+
              " [idx:2-7]f1,f2,f3,f4,f5,f6],\n"+
-             " recv: status_byte\n",
+             " recv: status_byte + sensor data\n",
             32,                                                 // Expected Revc Bytes
-            1,                                                  // Expected Send Bytes
-            1.0f                                                // Expected Timeout 
+            21,                                                 // Expected Send Bytes: 1 status byte + 5 floats sensor data
+            1.0f                                                // Expected Timeout
           ),
       new CommandInfo(
             MsgHeader.STEP_SIM,                                   // ENUM HEADER CODE
             "STEP_SIM",                                           // Name
             $"[idx:0][send: {(int)MsgHeader.STEP_SIM}.0f],\n"+    // Help String
              " [idx:1]<numSteps>default=1 (Simulate n steps),\n"+
-             " recv: status_byte\n",
+             " recv: status_byte + sensor data\n",
             8,                                                    // Expected Revc Bytes
-            1,                                                    // Expected Send Bytes
-            1.0f                                                  // Expected Timeout 
+            21,                                                   // Expected Send Bytes: 1 status byte + 5 floats sensor data
+            1.0f                                                  // Expected Timeout
           ),
       new CommandInfo(
             MsgHeader.RESET,                                            // ENUM HEADER CODE
@@ -211,13 +215,10 @@ namespace Mujoco {
              "[idx:2-8]<sub1: pose array [Px,Py,Pz,w,x,y,z]>,"+
              "[idx:9-11] <vel [LinVelx, LinVely, LinVelz]>]"+
              "[idx:12-14] <ang vel [AngVelx, AngVely, AngVelz]>]\n"+
-             // "[idx:15-21]<sub1: pose array [Px,Py,Pz,w,x,y,z]>,"+
-             // "[idx:22-24] <vel [LinVelx, LinVely, LinVelz]>]"+
-             // "[idx:25-27] <ang vel [AngVelx, AngVely, AngVelz]>]\n"+
-             " recv: status_byte\n",
+             " recv: status_byte + sensor data\n",
             60,                                                         // Expected Revc Bytes
-            1,                                                          // Expected Send Bytes
-            2.0f                                                        // Expected Timeout 
+            21,                                                         // Expected Send Bytes: 1 status byte + 5 floats sensor data
+            2.0f                                                        // Expected Timeout
           ),
     };
 
@@ -249,14 +250,10 @@ namespace Mujoco {
 
     private object serverLock = new object();
 
-    // OPTIMIZATION: Reusable buffers (moved to class level for better organization)
-    private static byte[] reusableCommandBuffer = new byte[64]; // Max command size (RESET = 60 bytes)
-    private static readonly byte[] heartbeatResponse = new byte[] { 0 };
+    // OPTIMIZATION: Reusable buffers
     private static readonly byte[] errorResponse = new byte[] { 1 };
-    private static readonly byte[] successResponse = new byte[] { 0 };
 
     // Public and global access to the active MjSceneGenerationContext.
-    // Throws an exception if accessed when the scene is not being generated.
     public MjcfGenerationContext GenerationContext {
       get {
         if (_generationContext == null) {
@@ -271,7 +268,7 @@ namespace Mujoco {
       get {
         if (_instance == null) {
           var instances = FindObjectsOfType<MjScene>();
-          if (instances.Length >= 1) { // even one is too much - _instance shouldn't have been null.
+          if (instances.Length >= 1) {
             throw new InvalidOperationException(
                 "A MjScene singleton is created automatically, yet multiple instances exist.");
           } else {
@@ -296,16 +293,12 @@ namespace Mujoco {
     }
 
     private static MjScene _instance = null;
-
     private List<MjComponent> _orderedComponents;
-
     public event EventHandler<MjStepArgs> postInitEvent;
     public event EventHandler<MjStepArgs> preUpdateEvent;
     public event EventHandler<MjStepArgs> ctrlCallback;
     public event EventHandler<MjStepArgs> postUpdateEvent;
     public event EventHandler<MjStepArgs> preDestroyEvent;
-
-
 
     private void InitializeArrowControllers() {
       ArrowControllers = new List<ArrowController>();
@@ -315,78 +308,32 @@ namespace Mujoco {
           Debug.LogWarning($"GameObject for Arrow_{j+1} not found.");
           continue;
         }
-
-        // Debug: Check if GameObject is active
-        Debug.Log($"Arrow_{j+1} found. Active: {arrowGO.activeSelf}, ActiveInHierarchy: {arrowGO.activeInHierarchy}");
-
-        // Debug: List all components on the GameObject
-        var components = arrowGO.GetComponents<Component>();
-        Debug.Log($"Arrow_{j+1} has {components.Length} components:");
-        foreach (var comp in components) {
-          if (comp == null) {
-            Debug.Log("  - [Missing Script Reference]");
-          } else {
-            Debug.Log($"  - {comp.GetType().Name}");
-          }
-        }
-
-        // Try different ways to get the component
         var ctrl = arrowGO.GetComponent<ArrowController>();
-        if (ctrl == null) {
-          // Try getting it from children
-          ctrl = arrowGO.GetComponentInChildren<ArrowController>();
-          if (ctrl != null) {
-            Debug.Log($"Found ArrowController in child of Arrow_{j+1}");
-          }
-        }
-
         if (ctrl != null) {
           ArrowControllers.Add(ctrl);
-          Debug.Log($"Arrow_{j+1} initialized and set to 0 for siteCtrlId {siteCtrlIds[j]}");
           ctrl.SetLength(0.0f);
         } else {
           Debug.LogWarning($"ArrowController not found on Arrow_{j+1}.");
-
-          // Check if it might be on parent
-          if (arrowGO.transform.parent != null) {
-            var parentCtrl = arrowGO.transform.parent.GetComponent<ArrowController>();
-            if (parentCtrl != null) {
-              Debug.Log($"Found ArrowController on parent of Arrow_{j+1}");
-            }
-          }
         }
       }
     }
 
-    // Alternative: Try waiting more frames
     private IEnumerator DeferredArrowInit() {
-      // Wait multiple frames to ensure everything is initialized
-      for (int i = 0; i < 5; i++) {
-        yield return null;
-      }
+      yield return null;
       InitializeArrowControllers();
     }
 
     private void InitializeSliderController() {
       sliderController = FindObjectOfType<SliderController>();
-      // Try to find the SliderController in the scene
-
       if (sliderController != null && sliderController.speedSlider == null){
-        Debug.LogWarning("SliderController found, but speedSlider reference is missing.");
-
-        // Try to find slider by exact path first
         var slider = GameObject.Find("UI/SpeedSlider")?.GetComponent<Slider>();
-
         if (slider == null){
-          // Fallback: search by name anywhere in scene
           slider = GameObject.FindObjectsOfType<Slider>()
             .FirstOrDefault(s => s.gameObject.name == "SpeedSlider");
         }
-
         if (slider != null){
           sliderController.speedSlider = slider;
-          Debug.Log("Auto-assigned speedSlider to SliderController.");
-        }else{
+        } else {
           Debug.LogWarning("Could not auto-assign speedSlider - Slider GameObject not found.");
         }
       }
@@ -395,61 +342,47 @@ namespace Mujoco {
     protected unsafe void Start() {
       SceneRecreationAtLateUpdateRequested = false;
       CreateScene();
-       
       StartCoroutine(DeferredArrowInit());
-      // StartCoroutine(DeferredUIInit());
-
-      // Register the control callback
       ctrlCallback += OnControlCallback;
-
-      // Start the socket server after scene creation
       if (enableSocketServer) {
         NetHelpMessageLength = CalculateHelpMessageLength(Commands);
-        StartSocketServer(ImageSocket);
         StartSocketServer(actionSocket);
       }
     }
 
     protected unsafe void OnDestroy() {
-      // Stop the socket server before destroying the scene
-      StopSocketServer(ImageSocket);
       StopSocketServer(actionSocket);
       DestroyScene();
     }
 
     protected unsafe void FixedUpdate() {
-      // if (Input.GetKeyDown(KeyCode.Escape))
-      // {
-      //   Cursor.lockState = CursorLockMode.None;
-      //   Cursor.visible = true;
-      // }
       lock (serverSimulationLock) {
-        Model->opt.viscosity = 0.00009*float.Parse(viscosityTextField.text);
+        Model->opt.viscosity = 0.00009f*float.Parse(viscosityTextField.text);
+        Model->opt.timestep = float.Parse(timestepTextField.text);
 
         while (pendingSteps.Count > 0) {
           numSteps += pendingSteps.Dequeue();
         }
-        // public static float sliderValue = slider.value;
 
-        // Limit steps per frame to prevent freezing
-        const int MAX_STEPS_PER_FRAME = 1; // Adjust based on your performance needs
-        int stepsToExecute = Math.Min(numSteps, MAX_STEPS_PER_FRAME);
-
-
-        for (int i = 0; i < stepsToExecute; i++) {
-          preUpdateEvent?.Invoke(this, new MjStepArgs(Model, Data));
-          StepScene();
-          postUpdateEvent?.Invoke(this, new MjStepArgs(Model, Data));
-          numSteps--;
+        int stepsToExecute = numSteps;
+        if (stepsToExecute > 0) {
+          timer.Track(0);
+          for (int i = 0; i < stepsToExecute; i++) {
+            preUpdateEvent?.Invoke(this, new MjStepArgs(Model, Data));
+            StepScene();
+            postUpdateEvent?.Invoke(this, new MjStepArgs(Model, Data));
+            numSteps--;
+          }
+          timer.Track(0);
         }
+        simtimeTextField.text = Data->time.ToString("F4");
+        realtimeTextField.text = ((float)timer.GetElapsedSeconds(0)).ToString("F4");
 
-        // Only signal when ALL steps complete
         if (numSteps == 0) {
           Monitor.PulseAll(serverSimulationLock);
         }
       }
     }
-
 
     public bool SceneRecreationAtLateUpdateRequested = false;
 
@@ -459,34 +392,12 @@ namespace Mujoco {
         SceneRecreationAtLateUpdateRequested = false;
       }
     }
-
-    // Context used during scene generation where components will store their shared dependencies
-    // (such as the mesh assets they reference, or common compiler settings that need to be resolved
-    // globally).
-    // The field will be initialized with a class instance only during the scene generation.
-    // A public read-only property will provide MjComponents with access to the instance
-    // of that field.
     private MjcfGenerationContext _generationContext;
 
-    // Builds a new Mujoco scene.
     public unsafe XmlDocument CreateScene(bool skipCompile=false) {
       if (_generationContext != null) {
-        throw new InvalidOperationException(
-            "The scene is currently being generated on another thread.");
+        throw new InvalidOperationException("The scene is currently being generated on another thread.");
       }
-      // Linearize the hierarchy of transforms of the components.
-      // We will use this list to update the transforms of the associated GameObject in a way that
-      // ensures we first update the parent transforms, and then we progress down the hierarchy
-      // tree and update the children.
-      // We're doing this, because we will use Unity's hierarchical transforms system to translate
-      // Mujoco elements' world transforms directly to Unity's world coordinates. That however
-      // will only work if we can guarantee that for every child, the parent transforms have already
-      // been recalculated.
-      //
-      // DESIGN: An alternative to that would be to operate in local space on the Unity side.
-      // I briefly explored that approach, but decided against it. It increases the amount of code
-      // on the side of the individual components. This solution allows to restrict the code in the
-      // components to a bare minimum, at the expense of one extra method here.
       var hierarchyRoots = FindObjectsOfType<MjComponent>()
         .Where(component => MjHierarchyTool.FindParentComponent(component) == null)
         .Select(component => component.transform)
@@ -503,44 +414,32 @@ namespace Mujoco {
       } catch (Exception e) {
         _generationContext = null;
         Debug.LogException(e);
-#if UNITY_EDITOR
+        #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;
-#else
+        #else
         Application.Quit();
-#endif
+        #endif
         throw;
       }
       _generationContext = null;
 
-      // Save the Mjcf to a file for debug purposes.
       var settings = MjGlobalSettings.Instance;
       if (settings && !string.IsNullOrEmpty(settings.DebugFileName)) {
         SaveToFile(sceneMjcf, Path.Combine(Application.temporaryCachePath, settings.DebugFileName));
       }
 
       if (!skipCompile) {
-        // Compile the scene from the Mjcf.
         CompileScene(sceneMjcf, _orderedComponents);
       }
       postInitEvent?.Invoke(this, new MjStepArgs(Model, Data));
       return sceneMjcf;
     }
 
-    private unsafe void CompileScene(
-        XmlDocument mjcf, IEnumerable<MjComponent> components) {
+    private unsafe void CompileScene(XmlDocument mjcf, IEnumerable<MjComponent> components) {
       Model = MjEngineTool.LoadModelFromString(mjcf.OuterXml);
-      if (Model == null) {
-        throw new NullReferenceException("Model loading failed, see other errors for root cause.");
-      } else {
-        Data = MujocoLib.mj_makeData(Model);
-      }
-      // Model->opt.viscosity =0.00009;
-      
-      if (Data == null) {
-        throw new NullReferenceException("Model loaded but mj_makeData failed.");
-      }
-
-      // Bind the components to their Mujoco counterparts.
+      if (Model == null) throw new NullReferenceException("Model loading failed.");
+      Data = MujocoLib.mj_makeData(Model);
+      if (Data == null) throw new NullReferenceException("mj_makeData failed.");
       foreach (var component in components) {
         component.BindToRuntime(Model, Data);
       }
@@ -554,20 +453,12 @@ namespace Mujoco {
       }
     }
 
-    // This must be called after every change in the Unity scene during runtime, in order to keep the
-    // MuJoCo physics scene in sync.  The spatial arrangement in the MJCF that creates the new physics
-    // is defined by the Unity transforms; therefore, we:
-    // 1. cache the joint states;
-    // 2. reset the Unity scene to its configuration at initialization;
-    // 3. recreate the scene in this pristine configuration;
-    // 4. rehydrate the physics scene, and sync the Unity scene to it.
     public unsafe void RecreateScene() {
-      // cache joint states in order to re-apply it to the new scene
       var joints = FindObjectsOfType<MjBaseJoint>();
       var positions = new Dictionary<MjBaseJoint, double[]>();
       var velocities = new Dictionary<MjBaseJoint, double[]>();
       foreach (var joint in joints) {
-        if (joint.QposAddress > -1) { // newly added components shouldn't be cached
+        if (joint.QposAddress > -1) {
           switch (Model->jnt_type[joint.MujocoId]) {
             default:
             case (int)MujocoLib.mjtJoint.mjJNT_HINGE:
@@ -577,50 +468,34 @@ namespace Mujoco {
               break;
             case (int)MujocoLib.mjtJoint.mjJNT_BALL:
               positions[joint] = new double[] {
-                Data->qpos[joint.QposAddress],
-                Data->qpos[joint.QposAddress+1],
-                Data->qpos[joint.QposAddress+2],
-                Data->qpos[joint.QposAddress+3]};
+                Data->qpos[joint.QposAddress], Data->qpos[joint.QposAddress+1],
+                Data->qpos[joint.QposAddress+2], Data->qpos[joint.QposAddress+3]};
               velocities[joint] = new double[] {
-                Data->qvel[joint.DofAddress],
-                Data->qvel[joint.DofAddress+1],
+                Data->qvel[joint.DofAddress], Data->qvel[joint.DofAddress+1],
                 Data->qvel[joint.DofAddress+2]};
               break;
             case (int)MujocoLib.mjtJoint.mjJNT_FREE:
               positions[joint] = new double[] {
-                Data->qpos[joint.QposAddress],
-                Data->qpos[joint.QposAddress+1],
-                Data->qpos[joint.QposAddress+2],
-                Data->qpos[joint.QposAddress+3],
-                Data->qpos[joint.QposAddress+4],
-                Data->qpos[joint.QposAddress+5],
+                Data->qpos[joint.QposAddress], Data->qpos[joint.QposAddress+1],
+                Data->qpos[joint.QposAddress+2], Data->qpos[joint.QposAddress+3],
+                Data->qpos[joint.QposAddress+4], Data->qpos[joint.QposAddress+5],
                 Data->qpos[joint.QposAddress+6]};
               velocities[joint] = new double[] {
-                Data->qvel[joint.DofAddress],
-                Data->qvel[joint.DofAddress+1],
-                Data->qvel[joint.DofAddress+2],
-                Data->qvel[joint.DofAddress+3],
-                Data->qvel[joint.DofAddress+4],
-                Data->qvel[joint.DofAddress+5]};
+                Data->qvel[joint.DofAddress], Data->qvel[joint.DofAddress+1],
+                Data->qvel[joint.DofAddress+2], Data->qvel[joint.DofAddress+3],
+                Data->qvel[joint.DofAddress+4], Data->qvel[joint.DofAddress+5]};
               break;
           }
         }
       }
-
-      // update unity transforms according to qpos0, so they're ready to create the new MJCF
       MujocoLib.mj_resetData(Model, Data);
       MujocoLib.mj_kinematics(Model, Data);
       SyncUnityToMjState();
-
-      // Delete previous model, data
       DestroyScene();
-      // Create a new MJCF and new model+data, indices may be different
       CreateScene();
-
-      // for joints that persisted, set state of the new MuJoCo scene according to the cached state
       foreach (var joint in joints) {
         try {
-          var position = positions[joint]; // this will fail for new joints, hence try/catch
+          var position = positions[joint];
           var velocity = velocities[joint];
           switch (Model->jnt_type[joint.MujocoId]) {
             default:
@@ -656,12 +531,10 @@ namespace Mujoco {
           }
         } catch {}
       }
-      // update mj transforms:
       MujocoLib.mj_kinematics(Model, Data);
       SyncUnityToMjState();
     }
 
-    // Destroys the Mujoco scene.
     public unsafe void DestroyScene() {
       preDestroyEvent?.Invoke(this, new MjStepArgs(Model, Data));
       if (Model != null) {
@@ -674,211 +547,47 @@ namespace Mujoco {
       }
     }
 
-    // Quaternion to Euler angles conversion and buoyancy variables
-    private static double[] _Qorn = new double[4] {0, 0, 0, 0}; // w,x,y,z
-    private static double[] _orn = new double[3] {0, 0, 0}; // r[forward axis],p[possibly side axis],y[vertical axis]
+    private static double[] _Qorn = new double[4] {0, 0, 0, 0};
+    private static double[] _orn = new double[3] {0, 0, 0};
 
-    // Physics parameters for buoyancy
     [Header("Buoyancy Physics")]
     public bool enableBuoyancyPhysics = true;
-    public float waterGain = 470.0f;
-    public float volumeDisplaced = 0.4572f * 0.33782f * 0.254f;
-    public float startHeight = 0.0f;
-    public int[] thrusterControlIndices = new int[] { 6, 7, 8, 9 };
-    public string[] floatSiteNames = new string[] { "sfloat1", "sfloat2", "sfloat3", "sfloat4" };
-    private int[] floatSiteIds = null;
-
-    /// <summary>
-    /// Convert quaternion to Euler angles in degrees
-    /// </summary>
-    private void QuaternionToEuler(double x, double y, double z, double w, ref double roll, ref double pitch, ref double yaw) {
-      double t0 = +2.0 * (w * x + y * z);
-      double t1 = +1.0 - 2.0 * (x * x + y * y);
-      roll = Math.Atan2(t0, t1) * (180.0 / Math.PI);
-
-      double t2 = +2.0 * (w * y - z * x);
-      t2 = Math.Max(-1.0, Math.Min(1.0, t2));
-      pitch = Math.Asin(t2) * (180.0 / Math.PI);
-
-      double t3 = +2.0 * (w * z + x * y);
-      double t4 = +1.0 - 2.0 * (y * y + z * z);
-      yaw = Math.Atan2(t3, t4) * (180.0 / Math.PI);
-    }
-
-    /// <summary>
-    /// Apply buoyancy physics to the simulation
-    /// </summary>
-    private unsafe void ApplyBuoyancyPhysics2() {
-      if (!enableBuoyancyPhysics || Model == null || Data == null) {
-        return;
-      }
-
-
-      // Get position data for height calculation
-      double height = Data->qpos[2]; // Assuming qpos[2] is the vertical position
-
-      // Calculate buoyancy force
-      float maxBuoyancyForce = 9.806f * volumeDisplaced * 1000;
-      float force_error = (startHeight - (float)height) * waterGain;
-
-      // // Get orientation
-      // // Assuming sensordata contains quaternion data in order: w, x, y, z
-      // if (Model->nsensordata >= 4) {
-      //   for (int i = 0; i < 4; i++) {
-      //     _Qorn[i] = Data->sensordata[i];
-      //   }
-      //
-      //   // Convert to Euler angles
-      //   QuaternionToEuler(_Qorn[1], _Qorn[2], _Qorn[3], _Qorn[0],
-      //                      ref _orn[0], ref _orn[1], ref _orn[2]);
-      // }
-
-      double[] myTorque = new double[3] { 0.0, 0.0, 0.0 };
-      double[] myForce = new double[3] { 0.0, 0.0, 0.0 };
-
-      float netForce = 0f;
-
-      // Apply forces based on height
-      if (height <= startHeight - 0.1) {
-        // Object is below target height - apply upward buoyancy
-        float forceClamped = Math.Min(force_error, maxBuoyancyForce);
-        netForce = forceClamped / 4.0f;
-        // Debug.Log($"Buoyancy UP: {forceClamped:F4} | MAX: {maxBuoyancyForce:F4}");
-      }
-      else if (height >= startHeight + 0.1) {
-        // Object is above target height - apply downward force
-        float forceClamped = Math.Max(force_error, maxBuoyancyForce);
-        netForce = -forceClamped / 4.0f;
-
-        // Debug.Log($"Buoyancy DOWN: {netForce:F4} | MAX: {maxBuoyancyForce:F4}");
-      }
-
-      // Zero out forces!
-      // int nv = Model->nv;  // number of DoFs
-      // for (int i = 0; i < nv; i++) {
-      //     Data->qfrc_applied[i] = 0.0;
-      // }
-
-
-      // body_id: 1 # 1sub_body
-      // sf1_id: 5 # 1sfloat1
-      // sf2_id: 6 # 1sfloat2
-      // sf3_id: 7 # 1sfloat3
-      // sf4_id: 8 # 1sfloat4
-      //
-      // Hardcoded site IDs based on compiled model
-      int[] siteIds = new int[] {
-        1, // sfloat1
-        2, // sfloat2
-        3, // sfloat3
-        4  // sfloat4
-      };
-
-      // Define force and torque to apply
-      myForce = new double[3] { 0.0, 0.0, netForce }; // Apply along +Z
-      myTorque = new double[3] { 0.0, 0.0, 0.0 };
-      int bodyId = 1;
-
-      foreach (int siteId in siteIds) {
-        // Point on body: site world position
-        double* point_on_body = Data->site_xpos + 3 * siteId;
-
-        fixed (double* f = myForce)
-          fixed (double* t = myTorque) {
-            MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
-          }
-      }
-    }
 
     private unsafe void ApplyBuoyancyPhysics() {
-      if (!enableBuoyancyPhysics || Model == null || Data == null) {
-        return;
-      }
-
-      // Physical constants
-      const float water_density = 1000.0f;  // kg/m³
-      const float gravity = 9.806f;         // m/s²
-      const float _water_height = 0.2f;  // Water surface level
-      // float waterHeight_offset = uiController.WaterHeight;
-      float waterHeight_offset = float.Parse(waterSurfaceHeight.text);
-      float water_surface_height = _water_height + waterHeight_offset ;  // Water surface level
-
-
-      // Vehicle dimensions
-      const float height = 0.254f;    // 10 inches - height of buoyancy volume
-
-      // Get actual gravitational force applied by MuJoCo
-      // For the submarine body, qfrc_applied[2] should be the Z (vertical) force component
-      float actual_gravity_force = Math.Abs((float)Data->qfrc_applied[2]); // Take absolute value since gravity is negative
-
-      // Gravity compensation - apply upward force to counteract gravity
-      float gravity_compensation_per_corner = actual_gravity_force / 4.0f;
-
-      // Additional buoyancy force based on displaced water volume
-      const float buoyancy_coefficient = 0.2f;  // Additional buoyancy factor
-      float max_additional_buoyancy_per_corner = (water_density * gravity * height * 0.01f) * buoyancy_coefficient; // Adjust 0.01f for corner volume
-
-      // Get vehicle vertical position
-      float vehicle_height = (float)Data->qpos[2];
-
-      // Capture orientation quaternion
-      for (int i = 0; i < 4; i++) {
-        _Qorn[i] = Data->sensordata[i];
-      }
-
-      // Hardcoded site IDs based on compiled model
-      int[] siteIds = new int[] {
-        1, // sfloat1
-        2, // sfloat2
-        3, // sfloat3
-        4  // sfloat4
-      };
-
-      double[] myTorque = new double[3] { 0.0, 0.0, 0.0 };
-      int bodyId = 1;
-
-      // Calculate buoyancy for each corner
-      for (int i = 0; i < siteIds.Length; i++) {
-        // Start with gravity compensation (always applied)
-        float total_upward_force = gravity_compensation_per_corner;
-
-        // Get the Z-coordinate (vertical position) of this site
-        float site_z = (float)Data->site_xpos[3 * siteIds[i] + 2];  // Z component
-
-        // Calculate submersion depth
-        float submersion_depth = water_surface_height - site_z;
-
-        if (submersion_depth > 0.0f) {
-          // Site is submerged - add additional buoyancy
-          // Clamp submersion to maximum effective depth
-          float effective_depth = (submersion_depth > height) ? height : submersion_depth;
-
-          // Additional buoyancy force proportional to submerged volume fraction
-          float submerged_fraction = effective_depth / height;
-          float additional_buoyancy = max_additional_buoyancy_per_corner * submerged_fraction;
-          float speed = sliderController.GetSliderValue();
-
-          const float const_height =  2.367f; 
-          // const_height =  2.367f is naturally bouyant, anything above sub go up when sliderController.GetSliderValue() is zero
-          total_upward_force += additional_buoyancy + 2.367f + sliderController.GetSliderValue();
-          // speed = 2.367 
+        if (!enableBuoyancyPhysics || Model == null || Data == null) return;
+        const float water_density = 1000.0f;
+        const float gravity = 9.806f;
+        const float _water_height = 0.2f;
+        float waterHeight_offset = float.Parse(waterSurfaceHeight.text);
+        float water_surface_height = _water_height + waterHeight_offset;
+        const float height = 0.254f;
+        float actual_gravity_force = Math.Abs((float)Data->qfrc_applied[2]);
+        float gravity_compensation_per_corner = actual_gravity_force / 4.0f;
+        const float buoyancy_coefficient = 0.2f;
+        float max_additional_buoyancy_per_corner = (water_density * gravity * height * 0.01f) * buoyancy_coefficient;
+        int[] siteIds = new int[] { 1, 2, 3, 4 };
+        double[] myTorque = new double[3] { 0.0, 0.0, 0.0 };
+        int bodyId = 1;
+        for (int i = 0; i < siteIds.Length; i++) {
+            float total_upward_force = gravity_compensation_per_corner;
+            float site_z = (float)Data->site_xpos[3 * siteIds[i] + 2];
+            float submersion_depth = water_surface_height - site_z;
+            if (submersion_depth > 0.0f) {
+                float effective_depth = (submersion_depth > height) ? height : submersion_depth;
+                float submerged_fraction = effective_depth / height;
+                float additional_buoyancy = max_additional_buoyancy_per_corner * submerged_fraction;
+                total_upward_force += additional_buoyancy + 2.367f + sliderController.GetSliderValue();
+            }
+            double[] myForce = new double[3] { 0.0, 0.0, total_upward_force };
+            double* point_on_body = Data->site_xpos + 3 * siteIds[i];
+            fixed (double* f = myForce)
+            fixed (double* t = myTorque) {
+                MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
+            }
         }
-
-        // Apply the total upward force at this site
-        double[] myForce = new double[3] { 0.0, 0.0, total_upward_force }; // Apply along +Z
-
-        // Point on body: site world position
-        double* point_on_body = Data->site_xpos + 3 * siteIds[i];
-
-        fixed (double* f = myForce)
-          fixed (double* t = myTorque) {
-            MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
-          }
-      }
     }
 
     private unsafe void OnControlCallback(object sender, MjStepArgs args) {
-      // Apply controlforces on the main thread between mj_step1 and mj_step2
       lock (serverSimulationLock) {
         ApplyBuoyancyPhysics();
         if(pendingControlForces.Count > 0){
@@ -886,66 +595,39 @@ namespace Mujoco {
         }
         if (hasControlForces) {
           double[] myTorque = new double[3] { 0.0, 0.0, 0.0 };
-          float[] currentForces = new float[6]{ 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
           int bodyId = 1;
-          // ALL thrusters apply force along their LOCAL Z-axis
-          double[] localZDirection = new double[3] { 0, 0, 1 };
-
           for (int j = 0; j < siteCtrlIds.Length && j < _currentControlForces.Length; j++) {
             int siteId = siteCtrlIds[j];
             double* point_on_body = Data->site_xpos + 3 * siteId;
-
-            // Get the site's orientation matrix (3x3 rotation matrix)
-            // site_xmat contains 9 elements per site: [R00,R01,R02,R10,R11,R12,R20,R21,R22]
             double* siteMatrix = Data->site_xmat + 9 * siteId;
-
-            // Transform LOCAL Z-axis to GLOBAL coordinates
-            // global_direction = R * local_z_direction
-            // Since we're multiplying by [0, 0, 1], we just need the third column of the rotation matrix
             double[] globalDirection = new double[3];
-            globalDirection[0] = siteMatrix[2];  // R02
-            globalDirection[1] = siteMatrix[5];  // R12
-            globalDirection[2] = siteMatrix[8];  // R22
-          
-            // Scale by the force magnitude for THIS specific thruster
+            globalDirection[0] = siteMatrix[2];
+            globalDirection[1] = siteMatrix[5];
+            globalDirection[2] = siteMatrix[8];
             double forceMagnitude = _currentControlForces[j];
             double[] globalForce = new double[3] {
-              globalDirection[0] * forceMagnitude*float.Parse(forceMultiplier.text),
-              globalDirection[1] * forceMagnitude*float.Parse(forceMultiplier.text),
-              globalDirection[2] * forceMagnitude*float.Parse(forceMultiplier.text),
+              globalDirection[0] * forceMagnitude * float.Parse(forceMultiplier.text),
+              globalDirection[1] * forceMagnitude * float.Parse(forceMultiplier.text),
+              globalDirection[2] * forceMagnitude * float.Parse(forceMultiplier.text),
             };
-
-            ArrowControllers[j].SetLength(0.02f*(float)forceMagnitude);
-            // Debug.Log($"forceMagnitude: {(float)forceMagnitude}");
-
+            if(ArrowControllers.Count > j) ArrowControllers[j].SetLength(0.02f*(float)forceMagnitude);
             fixed (double* f = globalForce)
-              fixed (double* t = myTorque) {
-                MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
-              }
+            fixed (double* t = myTorque) {
+              MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
+            }
           }
-
-          Debug.Log("Applied control forces in ctrlCallback");
         }
       }
     }
 
-
-    // Updates the scene and the state of Mujoco simulation.
     public unsafe void StepScene() {
-      if (Model == null || Data == null) {
-        throw new NullReferenceException("Failed to create Mujoco runtime.");
-      }
+      if (Model == null || Data == null) throw new NullReferenceException("Mujoco runtime not created.");
       Profiler.BeginSample("MjStep");
-
-      // ZERO OUT FORCES AT THE VERY START OF EACH FRAME
       int nv = Model->nv;
       for (int i = 0; i < nv; i++) {
         Data->qfrc_applied[i] = 0.0;
       }
-
-      // Apply buoyancy physics before stepping the simulation
       ApplyBuoyancyPhysics();
-
       Profiler.BeginSample("MjStep.mj_step");
       if (ctrlCallback != null){
         MujocoLib.mj_step1(Model, Data);
@@ -955,138 +637,69 @@ namespace Mujoco {
       else {
         MujocoLib.mj_step(Model, Data);
       }
-      Profiler.EndSample(); // MjStep.mj_step
+      Profiler.EndSample();
       CheckForPhysicsException();
-
       Profiler.BeginSample("MjStep.OnSyncState");
       SyncUnityToMjState();
-      Profiler.EndSample(); // MjStep.OnSyncState
-      Profiler.EndSample(); // MjStep
+      Profiler.EndSample();
+      Profiler.EndSample();
     }
 
     private unsafe void CheckForPhysicsException() {
-      if (Data->warning0.number > 0) {
-        Data->warning0.number = 0;
-        throw new PhysicsRuntimeException("INERTIA: (Near-) Singular inertia matrix.");
-      }
-      if (Data->warning1.number > 0) {
-        Data->warning1.number = 0;
-        throw new PhysicsRuntimeException($"CONTACTFULL: nconmax {Model->nconmax} isn't sufficient.");
-      }
-      if (Data->warning2.number > 0) {
-        Data->warning2.number = 0;
-        throw new PhysicsRuntimeException("CNSTRFULL: njmax {Model.njmax} isn't sufficient.");
-      }
-      if (Data->warning3.number > 0) {
-        Data->warning3.number = 0;
-        throw new PhysicsRuntimeException("VGEOMFULL: who constructed a mjvScene?!");
-      }
-      if (Data->warning4.number > 0) {
-        Data->warning4.number = 0;
-        throw new PhysicsRuntimeException("BADQPOS: NaN/inf in qpos.");
-      }
-      if (Data->warning5.number > 0) {
-        Data->warning5.number = 0;
-        throw new PhysicsRuntimeException("BADQVEL: NaN/inf in qvel.");
-      }
-      if (Data->warning6.number > 0) {
-        Data->warning6.number = 0;
-        throw new PhysicsRuntimeException("BADQACC: NaN/inf in qacc.");
-      }
-      if (Data->warning7.number > 0) {
-        Data->warning7.number = 0;
-        throw new PhysicsRuntimeException("BADCTRL: NaN/inf in ctrl.");
-      }
+      if (Data->warning0.number > 0) { Data->warning0.number = 0; throw new PhysicsRuntimeException("INERTIA"); }
+      if (Data->warning1.number > 0) { Data->warning1.number = 0; throw new PhysicsRuntimeException("CONTACTFULL"); }
+      if (Data->warning2.number > 0) { Data->warning2.number = 0; throw new PhysicsRuntimeException("CNSTRFULL"); }
+      if (Data->warning3.number > 0) { Data->warning3.number = 0; throw new PhysicsRuntimeException("VGEOMFULL"); }
+      if (Data->warning4.number > 0) { Data->warning4.number = 0; throw new PhysicsRuntimeException("BADQPOS"); }
+      if (Data->warning5.number > 0) { Data->warning5.number = 0; throw new PhysicsRuntimeException("BADQVEL"); }
+      if (Data->warning6.number > 0) { Data->warning6.number = 0; throw new PhysicsRuntimeException("BADQACC"); }
+      if (Data->warning7.number > 0) { Data->warning7.number = 0; throw new PhysicsRuntimeException("BADCTRL"); }
     }
 
-    // Generate a Mujoco scene description using the specified components.
     private XmlDocument GenerateSceneMjcf(IEnumerable<MjComponent> components) {
       var doc = new XmlDocument();
       var MjRoot = (XmlElement)doc.AppendChild(doc.CreateElement("mujoco"));
-
-      // Scene definition section.
       var worldMjcf = (XmlElement)MjRoot.AppendChild(doc.CreateElement("worldbody"));
-      BuildHierarchicalMjcf(
-          doc,
-          components.Where(component =>
-            (component is MjBaseBody) ||
-            (component is MjInertial) ||
-            (component is MjBaseJoint) ||
-            (component is MjGeom) ||
-            (component is MjSite)),
-          worldMjcf);
-
-      // Non-hierarchical sections:
-      MjRoot.AppendChild(GenerateMjcfSection(
-            doc, components.Where(component => component is MjExclude), "contact"));
-
-      MjRoot.AppendChild(GenerateMjcfSection(
-            doc, components.Where(component => component is MjBaseTendon), "tendon"));
-
-      MjRoot.AppendChild(GenerateMjcfSection(
-            doc, components.Where(component => component is MjBaseConstraint), "equality"));
-
-      MjRoot.AppendChild(
-          GenerateMjcfSection(doc,
-            components.Where(component => component is MjActuator)
-            .OrderBy(component => component.transform.GetSiblingIndex()),
-            "actuator"));
-
-      MjRoot.AppendChild(
-          GenerateMjcfSection(doc,
-            components.Where(component => component is MjBaseSensor)
-            .OrderBy(component => component.transform.GetSiblingIndex()),
-            "sensor"));
-      // Generate the Mjcf of the runtime dependencies added to the context.
+      BuildHierarchicalMjcf(doc, components.Where(c => (c is MjBaseBody) || (c is MjInertial) || (c is MjBaseJoint) || (c is MjGeom) || (c is MjSite)), worldMjcf);
+      MjRoot.AppendChild(GenerateMjcfSection(doc, components.Where(c => c is MjExclude), "contact"));
+      MjRoot.AppendChild(GenerateMjcfSection(doc, components.Where(c => c is MjBaseTendon), "tendon"));
+      MjRoot.AppendChild(GenerateMjcfSection(doc, components.Where(c => c is MjBaseConstraint), "equality"));
+      MjRoot.AppendChild(GenerateMjcfSection(doc, components.Where(c => c is MjActuator).OrderBy(c => c.transform.GetSiblingIndex()), "actuator"));
+      MjRoot.AppendChild(GenerateMjcfSection(doc, components.Where(c => c is MjBaseSensor).OrderBy(c => c.transform.GetSiblingIndex()), "sensor"));
       _generationContext.GenerateMjcf(MjRoot);
       return doc;
     }
 
-    private XmlElement GenerateMjcfSection(
-        XmlDocument doc, IEnumerable<MjComponent> components, string sectionName) {
+    private XmlElement GenerateMjcfSection(XmlDocument doc, IEnumerable<MjComponent> components, string sectionName) {
       var section = doc.CreateElement(sectionName);
       foreach (var component in components) {
-        var componentMjcf = component.GenerateMjcf(_generationContext.GenerateName(component), doc);
-        section.AppendChild(componentMjcf);
+        section.AppendChild(component.GenerateMjcf(_generationContext.GenerateName(component), doc));
       }
       return section;
     }
 
-    private void BuildHierarchicalMjcf(
-        XmlDocument doc, IEnumerable<MjComponent> components, XmlElement worldMjcf) {
+    private void BuildHierarchicalMjcf(XmlDocument doc, IEnumerable<MjComponent> components, XmlElement worldMjcf) {
       var associations = new Dictionary<MjComponent, XmlElement>();
-
-      // Build individual Mjcfs.
       foreach (var component in components) {
-        var componentMjcf = component.GenerateMjcf(
-            _generationContext.GenerateName(component), doc);
-        // We'll use a dictionary to define associations between the components and the corresponding
-        // Mjcf elements.
-        associations.Add(component, componentMjcf);
+        associations.Add(component, component.GenerateMjcf(_generationContext.GenerateName(component), doc));
       }
-
-      // Connect the Mjcfs into hierarchy.
       foreach (var component in components) {
-        var componentMjcf = associations[component];
         var parentComponent = MjHierarchyTool.FindParentComponent(component);
         if (parentComponent != null) {
-          var parentComponentMjcf = associations[parentComponent];
-          parentComponentMjcf.AppendChild(componentMjcf);
+          associations[parentComponent].AppendChild(associations[component]);
         } else {
-          worldMjcf.AppendChild(componentMjcf);
+          worldMjcf.AppendChild(associations[component]);
         }
       }
     }
 
-    // Saves an XML document to the specified file.
     private void SaveToFile(XmlDocument document, string filePath) {
       try {
-        using (var stream = File.Open(filePath, FileMode.Create)) {
-          using (var writer = new XmlTextWriter(stream, new UTF8Encoding(false))) {
-            writer.Formatting = Formatting.Indented;
-            document.WriteContentTo(writer);
-            Debug.Log($"MJCF saved to {filePath}");
-          }
+        using (var stream = File.Open(filePath, FileMode.Create))
+        using (var writer = new XmlTextWriter(stream, new UTF8Encoding(false))) {
+          writer.Formatting = Formatting.Indented;
+          document.WriteContentTo(writer);
+          Debug.Log($"MJCF saved to {filePath}");
         }
       } catch (IOException ex) {
         Debug.LogWarning("Failed to save Xml to a file: " + ex.ToString(), this);
@@ -1095,646 +708,230 @@ namespace Mujoco {
 
     #region Socket Server Implementation
 
-    /// Starts the socket server
     private void StartSocketServer(SocketData socketData){
-      lock (serverLock)
-      {
-        if (socketData.isRunning) return;
-
-        socketData.isRunning = true;
-        socketData.thread = new Thread(() => ServerLoop(socketData));
-        socketData.thread.IsBackground = true;
-        socketData.thread.Start();
-        Debug.Log($"{socketData.name} socket server started on {serverIpAddress}:{socketData.port}");
-
-        // No need to update the reference as we're using ref parameters
-      }
+        if (!enableSocketServer) return;
+        lock (serverLock) {
+            if (socketData.isRunning) return;
+            socketData.isRunning = true;
+            socketData.thread = new Thread(() => ServerLoop(socketData));
+            socketData.thread.IsBackground = true;
+            socketData.thread.Start();
+            Debug.Log($"{socketData.name} UDP server started on {serverIpAddress}:{socketData.port}");
+        }
     }
 
-    /// Stops the socket server
     private void StopSocketServer(SocketData socketData){
-      lock (serverLock)
-      {
-        if (!socketData.isRunning) return;
-
-        socketData.isRunning = false;
-
-        try
-        {
-          if (socketData.socket != null)
-          {
-            socketData.socket.Close();
-            socketData.socket = null;
-          }
-        }
-        catch (Exception e)
-        {
-          Debug.LogError($"Error closing {socketData.name} server socket: {e.Message}");
-        }
-
-        if (socketData.thread != null)
-        {
-          socketData.thread.Join(1000);  // Wait up to 1 second for thread to terminate
-          socketData.thread = null;
-        }
-
-        Debug.Log($"{socketData.name} socket server stopped");
-
-        // No need to update the reference as we're using ref parameters
-      }
-    }
-
-    /// Main server loop
-    private void ServerLoop(SocketData socketData){
-      while (socketData.isRunning)
-      {
-        try
-        {
-          // Create and configure the socket
-          socketData.socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-          socketData.socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-
-          // OPTIMIZATION: Apply socket settings at creation time
-          socketData.socket.NoDelay = true;                    // Disable Nagle's algorithm for low latency
-          socketData.socket.ReceiveBufferSize = 8192;          // Optimize OS receive buffer
-          socketData.socket.SendBufferSize = 8192;             // Optimize OS send buffer
-          socketData.socket.LingerState = new LingerOption(false, 0);  // Don't linger on close
-
-          socketData.socket.Bind(new IPEndPoint(IPAddress.Parse(serverIpAddress), socketData.port));
-          socketData.socket.Listen(30);
-
-          Debug.Log($"{socketData.name} socket server listening for connections");
-
-          // Accept and process client connections
-          while (socketData.isRunning)
-          {
-            Socket clientSocket = socketData.socket.Accept();
-            // Set client socket timeouts
-            clientSocket.ReceiveTimeout = 5000;
-            clientSocket.SendTimeout = 5000;
-
-            // ThreadPool.QueueUserWorkItem(ProcessClientRequest, clientSocket);
-            ThreadPool.QueueUserWorkItem(state => PCR2_Optimized((Socket)state), clientSocket);
-
-          }
-        }
-        catch (SocketException se)
-        {
-          if (socketData.isRunning)
-          {
-            Debug.LogError($"{socketData.name} socket error: {se.Message}");
-            Thread.Sleep(1000);  // Wait a bit before trying to restart
-          }
-        }
-        catch (Exception e)
-        {
-          if (socketData.isRunning)
-          {
-            Debug.LogError($"{socketData.name} server error: {e.Message}");
-            Thread.Sleep(1000);  // Wait a bit before trying to restart
-          }
-        } finally {
-          if (socketData.socket != null) {
+        if (!enableSocketServer) return;
+        lock (serverLock) {
+            if (!socketData.isRunning) return;
+            socketData.isRunning = false;
             try {
-              socketData.socket.Close();
-              socketData.socket = null;
+                socketData.socket?.Close();
+            } catch (Exception e) {
+                Debug.LogError($"Error closing {socketData.name} server socket: {e.Message}");
             }
-            catch { }
-          }
+            socketData.thread?.Join(500);
+            Debug.Log($"{socketData.name} UDP server stopped");
         }
-
-        // If we're still supposed to be running, wait a bit and then restart
-        if (socketData.isRunning)
-        {
-          Debug.Log($"Attempting to restart {socketData.name} socket server...");
-          Thread.Sleep(2000);
-        }
-
-        // No need to update the reference as we're using ref parameters
-      }
     }
 
-    // FIXED: Multi-request version of PCR2_Optimized
-    public unsafe void PCR2_Optimized(Socket clientSocket) {
-      bool isForceCommand = false;
+    private void ServerLoop(SocketData socketData) {
+        try {
+            socketData.socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socketData.socket.Bind(new IPEndPoint(IPAddress.Parse(serverIpAddress), socketData.port));
+            Debug.Log($"{socketData.name} UDP server listening for datagrams.");
 
-      try {
-        // Set socket timeouts for the entire session
-        clientSocket.ReceiveTimeout = 10000;  // 10 second timeout per request
-        clientSocket.SendTimeout = 5000;     // 5 second timeout for sends
+            byte[] receiveBuffer = new byte[1024];
+            EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
 
-        Debug.Log("Client connected, starting request processing loop");
-
-        // Main request processing loop - handle multiple requests per connection
-        while (clientSocket != null && clientSocket.Connected) {
-          try {
-            // Step 1: Check if data is available using Poll (non-blocking)
-            if (!clientSocket.Poll(100000, SelectMode.SelectRead)) { // 100ms timeout
-              continue; // No data available, continue loop
-            }
-
-            // Check if socket is actually disconnected
-            if (clientSocket.Available == 0) {
-              // Peek to see if connection is closed
-              byte[] testBuffer = new byte[1];
-              if (clientSocket.Receive(testBuffer, 0, 1, SocketFlags.Peek) == 0) {
-                Debug.Log("Client disconnected gracefully");
-                break;
-              }
-            }
-
-            // Step 2: Read command (first 4 bytes) using reusable buffer
-            int commandReceived = 0;
-            DateTime startTime = DateTime.Now;
-
-            while (commandReceived < 4) {
-              if ((DateTime.Now - startTime).TotalSeconds > 5.0) {
-                Debug.LogWarning("Timeout receiving command");
-                throw new TimeoutException("Command receive timeout");
-              }
-
-              if (clientSocket.Poll(1000, SelectMode.SelectRead)) {
-                int received = clientSocket.Receive(reusableCommandBuffer, commandReceived, 4 - commandReceived, SocketFlags.None);
-                if (received == 0) {
-                  Debug.Log("Client disconnected during command receive");
-                  return; // Exit the loop and function
+            while (socketData.isRunning) {
+                try {
+                    if (socketData.socket.Available == 0) {
+                        Thread.Sleep(1);
+                        continue;
+                    }
+                    int bytesRead = socketData.socket.ReceiveFrom(receiveBuffer, ref remoteEndPoint);
+                    if (bytesRead > 0) {
+                        ThreadPool.QueueUserWorkItem(state => {
+                            var tuple = (Tuple<byte[], int, EndPoint>)state;
+                            ProcessUdpRequest(tuple.Item1, tuple.Item2, tuple.Item3, socketData.socket);
+                        }, Tuple.Create(receiveBuffer, bytesRead, remoteEndPoint));
+                    }
+                } catch (SocketException se) {
+                    if (socketData.isRunning) Debug.LogWarning($"{socketData.name} socket error: {se.SocketErrorCode}");
                 }
-                commandReceived += received;
-              } else {
-                System.Threading.Thread.Sleep(1);
-              }
             }
+        } catch (Exception e) {
+            if (socketData.isRunning) Debug.LogError($"{socketData.name} server loop error: {e.Message}");
+        } finally {
+            socketData.socket?.Close();
+        }
+    }
 
-            // Step 3: Parse command and validate
-            float commandFloat = BitConverter.ToSingle(reusableCommandBuffer, 0);
+    private unsafe void ProcessUdpRequest(byte[] requestData, int length, EndPoint remoteEndPoint, Socket serverSocket) {
+        try {
+            if (length < 4) return;
+            float commandFloat = BitConverter.ToSingle(requestData, 0);
             int command = (int)commandFloat;
+            
+            float[] floatsReceived = new float[length / 4];
+            Buffer.BlockCopy(requestData, 0, floatsReceived, 0, length);
+            
+            ProcessCommandOptimized(command, floatsReceived, remoteEndPoint, serverSocket);
 
-            if (!System.Enum.IsDefined(typeof(MsgHeader), command)) {
-              Debug.LogError($"Invalid command received: {command}");
-              continue; // Skip this request but keep connection open
-            }
-
-            // Step 4: Lookup command info from Commands array
-            int expectedRecvBytes = 4;
-            float timeout = 1.0f;
-            string commandName = "UNKNOWN";
-            bool commandFound = false;
-
-            foreach (var cmd in Commands) {
-              if ((int)cmd.MsgHeader == command) {
-                expectedRecvBytes = cmd.ExpectedRecvBytes;
-                timeout = cmd.ExpectedTimeoutSeconds;
-                commandName = cmd.Name;
-                commandFound = true;
-                break;
-              }
-            }
-
-            if (!commandFound) {
-              Debug.LogError($"Command {command} not found in Commands array");
-              continue; // Skip this request but keep connection open
-            }
-
-            // Step 5: Read remaining data if needed using SAME reusable buffer
-            if (expectedRecvBytes > 4) {
-              int remainingBytes = expectedRecvBytes - 4;
-              int totalReceived = 0;
-              startTime = DateTime.Now;
-
-              while (totalReceived < remainingBytes) {
-                if ((DateTime.Now - startTime).TotalSeconds > timeout) {
-                  Debug.LogWarning($"Timeout receiving data for command {commandName}");
-                  throw new TimeoutException($"Data receive timeout for {commandName}");
-                }
-
-                if (clientSocket.Poll(1000, SelectMode.SelectRead)) {
-                  int received = clientSocket.Receive(reusableCommandBuffer, 4 + totalReceived, remainingBytes - totalReceived, SocketFlags.None);
-                  if (received == 0) {
-                    Debug.Log("Client disconnected during data receive");
-                    return; // Exit the loop and function
-                  }
-                  totalReceived += received;
-                } else {
-                  System.Threading.Thread.Sleep(1);
-                }
-              }
-            }
-
-            // Step 6: Convert to floats for processing
-            float[] floatsReceived = new float[expectedRecvBytes / 4];
-            Buffer.BlockCopy(reusableCommandBuffer, 0, floatsReceived, 0, expectedRecvBytes);
-
-            // Step 7: Process command
-            ProcessCommandOptimized(command, floatsReceived, clientSocket);
-
-            Debug.Log($"Successfully processed {commandName} command");
-
-          } catch (TimeoutException) {
-            Debug.LogWarning("Request timeout, closing connection");
-            break; // Exit the loop
-          } catch (SocketException se) {
-            if (se.SocketErrorCode == SocketError.ConnectionReset || 
-                se.SocketErrorCode == SocketError.ConnectionAborted) {
-              Debug.Log("Client disconnected (socket exception)");
-              ZeroOutAppliedForces();
-            } else {
-              Debug.LogError($"Socket error during request processing: {se.Message}");
-            }
-            break; // Exit the loop
-          } catch (Exception e) {
-            Debug.LogError($"Error processing individual request: {e.Message}");
-
+        } catch (Exception e) {
+            Debug.LogError($"Error processing UDP request: {e.Message}");
             try {
-              clientSocket.Send(errorResponse);
-            } catch {
-              Debug.LogError("Failed to send error response, closing connection");
-              Debug.LogError("Zeroing Forces");
-              ZeroOutAppliedForces();
-              break; // Exit the loop if we can't even send error response
+                serverSocket.SendTo(errorResponse, remoteEndPoint);
+            } catch (Exception sendEx) {
+                Debug.LogError($"Failed to send error response: {sendEx.Message}");
             }
-
-            // Continue the loop for other types of errors
-          }
         }
-
-      } catch (Exception e) {
-        Debug.LogError($"Fatal error in client connection: {e.Message}");
-
-        if (isForceCommand) {
-          ZeroOutAppliedForces();
-        }
-      } finally {
-        // Only close the socket when we're done with the entire session
-        try {
-          if (clientSocket != null && clientSocket.Connected) {
-            clientSocket.Shutdown(SocketShutdown.Both);
-          }
-        } catch (Exception e) {
-          Debug.LogWarning($"Error during socket shutdown: {e.Message}");
-        } finally {
-          try {
-            clientSocket?.Close();
-            Debug.Log("Client socket closed");
-          } catch (Exception e) {
-            Debug.LogError($"Error closing client socket: {e.Message}");
-          }
-        }
-      }
     }
 
-    // OPTIMIZATION: Centralized command processing with reused buffers
-    private unsafe void ProcessCommandOptimized(int command, float[] floatsReceived, Socket clientSocket) {
-      switch (command) {
-        case (int)MsgHeader.HEARTBEAT:
-          clientSocket.Send(heartbeatResponse); // Reused buffer
-          Debug.Log("Processed HEARTBEAT command");
-          break;
+    private unsafe void ProcessCommandOptimized(int command, float[] floatsReceived, EndPoint remoteEndPoint, Socket serverSocket) {
+        switch ((MsgHeader)command) {
+            case MsgHeader.HEARTBEAT:
+                // UDP is connectionless, heartbeat is less critical but can be a keep-alive
+                serverSocket.SendTo(new byte[] { 0 }, remoteEndPoint);
+                break;
 
-        case (int)MsgHeader.GET_MODEL_INFO:
-          // Reuse modelInfoBuffer (your existing buffer)
-          float[] model_info = new float[6];
-          model_info[0] = (float)Data->time;
-          model_info[1] = (float)Model->nq;
-          model_info[2] = (float)Model->nv;
-          model_info[3] = (float)Model->na;
-          model_info[4] = (float)Model->nu;
-          model_info[5] = (float)Model->nbody;
-          Buffer.BlockCopy(model_info, 0, modelInfoBuffer, 0, modelInfoBuffer.Length);
-          clientSocket.Send(modelInfoBuffer);
-          Debug.Log("Processed GET_MODEL_INFO command");
-          break;
+            case MsgHeader.GET_MODEL_INFO:
+                float[] model_info = new float[6] {
+                    (float)Data->time, (float)Model->nq, (float)Model->nv,
+                    (float)Model->na, (float)Model->nu, (float)Model->nbody
+                };
+                byte[] modelInfoBytes = new byte[24];
+                Buffer.BlockCopy(model_info, 0, modelInfoBytes, 0, 24);
+                serverSocket.SendTo(modelInfoBytes, remoteEndPoint);
+                break;
 
-        case (int)MsgHeader.GET_SENSORDATA:
-          int len = (int)Model->nsensordata + 1;
-          double* sourcePtr = Data->sensordata;
+            case MsgHeader.GET_SENSORDATA:
+                 byte[] sensorResponse = GetSensorDataPayload();
+                 serverSocket.SendTo(sensorResponse, remoteEndPoint);
+                break;
 
-          // Reuse your existing _sensorData and _sensorDataBytes buffers
-          for (int i = 0; i < len - 1; i++) {
-            _sensorData[i] = (float)sourcePtr[i];
-          }
-          _sensorData[len - 1] = (float)Data->time;
-          Buffer.BlockCopy(_sensorData, 0, _sensorDataBytes, 0, len * sizeof(float));
-          clientSocket.Send(_sensorDataBytes, 0, len * sizeof(float), SocketFlags.None);
-          Debug.Log($"Processed GET_SENSORDATA command, sent {len * sizeof(float)} bytes");
-          break;
+            case MsgHeader.APPLY_CTRL:
+            case MsgHeader.STEP_SIM:
+            case MsgHeader.RESET:
+                lock (serverSimulationLock) {
+                    if ((MsgHeader)command == MsgHeader.RESET) {
+                        ZeroOutAppliedForces();
+                        pendingControlForces.Clear();
+                        Array.Clear(_currentControlForces, 0, _currentControlForces.Length);
+                        hasControlForces = false;
+                        MujocoLib.mj_resetData(Model, Data);
+                        ApplyQposQvelToSim(floatsReceived);
+                    } else if ((MsgHeader)command == MsgHeader.APPLY_CTRL) {
+                        float[] forces = new float[6];
+                        Array.Copy(floatsReceived, 2, forces, 0, 6);
+                        hasControlForces = true;
+                        pendingControlForces.Enqueue(forces);
+                    }
+                    pendingSteps.Enqueue((int)floatsReceived[1]);
+                    
+                    while (numSteps > 0 || pendingSteps.Count > 0) {
+                        Monitor.Wait(serverSimulationLock);
+                    }
+                }
+                byte[] responsePayload = GetSensorDataPayloadWithStatus();
+                serverSocket.SendTo(responsePayload, remoteEndPoint);
+                break;
 
-        case (int)MsgHeader.GET_RGB_IMAGE:
-          Debug.LogError("GET_RGB_IMAGE: Not Implemented");
-          clientSocket.Send(errorResponse); // Reused buffer
-          break;
+            case MsgHeader.GET_RGB_IMAGE:
+            case MsgHeader.GET_MASKED_IMAGE:
+                serverSocket.SendTo(errorResponse, remoteEndPoint);
+                break;
 
-        case (int)MsgHeader.GET_MASKED_IMAGE:
-          Debug.LogError("GET_MASKED_IMAGE: Not Implemented");
-          clientSocket.Send(errorResponse); // Reused buffer
-          break;
+            default:
+                string helpMessage = GenerateHelpMessage();
+                byte[] helpBytes = Encoding.UTF8.GetBytes(helpMessage);
+                serverSocket.SendTo(helpBytes, remoteEndPoint);
+                break;
+        }
+    }
 
-        case (int)MsgHeader.APPLY_CTRL:
-          lock (serverSimulationLock) {
-            float[] forces = new float[6];
-            for (int i = 0; i < 6; i++) {
-              forces[i] = floatsReceived[2 + i];
-            }
-
-            hasControlForces = true;
-            pendingControlForces.Enqueue(forces);
-            pendingSteps.Enqueue((int)floatsReceived[1]); // numSteps
-            needToWaitForSendingOnSuccess = true; 
-            Debug.Log($"Processed APPLY_CTRL command with {(int)floatsReceived[1]} steps");
-          }
-          break;
-
-        case (int)MsgHeader.STEP_SIM:
-          // Process STEP_SIM command
-          lock (serverSimulationLock) {
-            pendingSteps.Enqueue((int)floatsReceived[1]);
-            needToWaitForSendingOnSuccess = true;
-            Debug.Log($"Processed STEP_SIM command with {(floatsReceived.Length > 1 ? (int)floatsReceived[1] : 1)} steps");
-          }
-          break;
-
-        case (int)MsgHeader.RESET:
-          ZeroOutAppliedForces();
-          lock (serverSimulationLock) {
-            pendingControlForces.Clear();
-            Array.Clear(_currentControlForces, 0, _currentControlForces.Length);
-            hasControlForces = false;
-            pendingSteps.Enqueue((int)floatsReceived[1]);
-            needToWaitForSendingOnSuccess = true;
-            MujocoLib.mj_resetData(Model, Data);
-            bool resetSuccess = ApplyQposQvelToSim(floatsReceived);
-
-            // Send success/error response
-            byte[] response = resetSuccess ? successResponse : errorResponse;
-            Debug.Log($"Processed RESET command, success: {true}");
-          }
-          break;
-
-        default:
-          // Send help message
-          string helpMessage = GenerateHelpMessage();
-          byte[] helpBytes = System.Text.Encoding.UTF8.GetBytes(helpMessage);
-          byte[] lengthBytes = BitConverter.GetBytes(helpBytes.Length);
-          clientSocket.Send(lengthBytes);
-          clientSocket.Send(helpBytes);
-          Debug.Log($"Sent help message for unknown command: {command}");
-          break;
-
-      }
-
-      if (needToWaitForSendingOnSuccess) {
+    private unsafe byte[] GetSensorDataPayload() {
         int len = (int)Model->nsensordata + 1;
-        float[] _sensorData = new float[len];
-        byte[] _sensorDataBytes = new byte[len * sizeof(float)];
-
-        lock (serverSimulationLock) {
-          while (numSteps > 0 || pendingSteps.Count > 0) {
-            Monitor.Wait(serverSimulationLock, 100);
-          }
-
-          needToWaitForSendingOnSuccess = false;
-
-          double* sourcePtr = Data->sensordata;
-          for (int i = 0; i < len - 1; i++) {
-            _sensorData[i] = (float)sourcePtr[i];
-          }
-          _sensorData[len - 1] = (float)Data->time;
-
-          Buffer.BlockCopy(_sensorData, 0, _sensorDataBytes, 0, len * sizeof(float));
-
-          Debug.Log($"Processed GET_SENSORDATA command, prepared {len * sizeof(float)} bytes");
+        float[] sensorData = new float[len];
+        byte[] sensorDataBytes = new byte[len * sizeof(float)];
+        double* sourcePtr = Data->sensordata;
+        for (int i = 0; i < len - 1; i++) {
+            sensorData[i] = (float)sourcePtr[i];
         }
-
-        // ✅ Send success byte first
-        byte[] successByte = new byte[1] { 0x00 };
-        clientSocket.Send(successByte);
-
-        // ✅ Then send sensor data
-        clientSocket.Send(_sensorDataBytes, 0, _sensorDataBytes.Length, SocketFlags.None);
-      }
+        sensorData[len - 1] = (float)Data->time;
+        Buffer.BlockCopy(sensorData, 0, sensorDataBytes, 0, sensorDataBytes.Length);
+        return sensorDataBytes;
     }
-  
-    // OPTIMIZATION: Efficient socket cleanup
-    private void CloseClientSocket(Socket clientSocket) {
-      try {
-        Debug.LogError("Zeroing Forces");
-        ZeroOutAppliedForces();
-        if (clientSocket != null && clientSocket.Connected) {
-          clientSocket.Shutdown(SocketShutdown.Both);
+    
+    private unsafe byte[] GetSensorDataPayloadWithStatus() {
+        int len = (int)Model->nsensordata + 1;
+        float[] sensorData = new float[len];
+        byte[] responsePayload = new byte[1 + len * sizeof(float)];
+        
+        responsePayload[0] = 0x00; // Success byte
+        
+        double* sourcePtr = Data->sensordata;
+        for (int i = 0; i < len - 1; i++) {
+            sensorData[i] = (float)sourcePtr[i];
         }
-      } catch (Exception e) {
-        Debug.LogWarning($"Error during socket shutdown: {e.Message}");
-      } finally {
-        try {
-          clientSocket?.Close();
-        } catch (Exception e) {
-          Debug.LogError($"Error closing client socket: {e.Message}");
-        }
-      }
+        sensorData[len - 1] = (float)Data->time;
+        
+        Buffer.BlockCopy(sensorData, 0, responsePayload, 1, len * sizeof(float));
+        return responsePayload;
     }
 
-    /// Apply Start Qpos and Qvel to sim:
-    /// <pose array for sub 1 [Px,Py,Pz,Ow,Ox,Oy,Oz]>, <start vel for sub 1[Lvx,Lvy,Lvz] [Avx,Avy,Avz]>]
-    /// <TODO:pose array for sub 2 [Px,Py,Pz,Ow,Ox,Oy,Oz]>, <start vel for sub 2[Lvx,Lvy,Lvz] [Avx,Avy,Avz]>]
+
     private unsafe bool ApplyQposQvelToSim(float[] floatsReceived){
-      // For sub 1
       int offset = 2;
-      double Px = Data->qpos[0] = (double)floatsReceived[offset + 0]; // Pos
-      double Py = Data->qpos[1] = (double)floatsReceived[offset + 1];
-      double Pz = Data->qpos[2] = (double)floatsReceived[offset + 2];
-      double Ow = Data->qpos[3] = (double)floatsReceived[offset + 3]; // Orn
-      double Ox = Data->qpos[4] = (double)floatsReceived[offset + 4];
-      double Oy = Data->qpos[5] = (double)floatsReceived[offset + 5];
-      double Oz = Data->qpos[6] = (double)floatsReceived[offset + 6];
-      double xVel = Data->qvel[0] = (double)floatsReceived[offset + 7]; // LinVel
-      double yVel = Data->qvel[1] = (double)floatsReceived[offset + 8];
-      double zVel = Data->qvel[2] = (double)floatsReceived[offset + 9];
-      double angVelx = Data->qvel[3] =  (double)floatsReceived[offset + 10]; // AngVel
-      double angVely = Data->qvel[4] =  (double)floatsReceived[offset + 11];
-      double angVelz = Data->qvel[5] =  (double)floatsReceived[offset + 12];
-
-      if(false){ // TODO: Sub #2 Since SUB 2 is not implemented XML yet
-                 // For sub 2
-        offset = 14;
-        int sub2_qpos_offset = 7;
-        int sub2_qvel_offset = 6;
-        Px = Data->qpos[sub2_qpos_offset + 0] = (double)floatsReceived[offset + 0]; // Pos
-        Py = Data->qpos[sub2_qpos_offset + 1] = (double)floatsReceived[offset + 1];
-        Pz = Data->qpos[sub2_qpos_offset + 2] = (double)floatsReceived[offset + 2];
-        Ow = Data->qpos[sub2_qpos_offset + 3] = (double)floatsReceived[offset + 3]; // Orn
-        Ox = Data->qpos[sub2_qpos_offset + 4] = (double)floatsReceived[offset + 4];
-        Oy = Data->qpos[sub2_qpos_offset + 5] = (double)floatsReceived[offset + 5];
-        Oz = Data->qpos[sub2_qpos_offset + 6] = (double)floatsReceived[offset + 6];
-        xVel = Data->qvel[sub2_qvel_offset + 0] = (double)floatsReceived[offset + 7]; // LinVel
-        yVel = Data->qvel[sub2_qvel_offset + 1] = (double)floatsReceived[offset + 8];
-        zVel = Data->qvel[sub2_qvel_offset + 2] = (double)floatsReceived[offset + 8];
-        angVelx = Data->qvel[sub2_qvel_offset + 3] = (double)floatsReceived[offset + 10]; // AngVel
-        angVely = Data->qvel[sub2_qvel_offset + 4] = (double)floatsReceived[offset + 11];
-        angVelz = Data->qvel[sub2_qvel_offset + 5] = (double)floatsReceived[offset + 12];
-      }
-
+      Data->qpos[0] = (double)floatsReceived[offset + 0];
+      Data->qpos[1] = (double)floatsReceived[offset + 1];
+      Data->qpos[2] = (double)floatsReceived[offset + 2];
+      Data->qpos[3] = (double)floatsReceived[offset + 3];
+      Data->qpos[4] = (double)floatsReceived[offset + 4];
+      Data->qpos[5] = (double)floatsReceived[offset + 5];
+      Data->qpos[6] = (double)floatsReceived[offset + 6];
+      Data->qvel[0] = (double)floatsReceived[offset + 7];
+      Data->qvel[1] = (double)floatsReceived[offset + 8];
+      Data->qvel[2] = (double)floatsReceived[offset + 9];
+      Data->qvel[3] = (double)floatsReceived[offset + 10];
+      Data->qvel[4] = (double)floatsReceived[offset + 11];
+      Data->qvel[5] = (double)floatsReceived[offset + 12];
       return true;
     }
 
-    /// Zero out all applied forces in the simulation
     private unsafe void ZeroOutAppliedForces(){
       if (Model == null || Data == null) return;
-
-      // Zero out qfrc_applied
       int nv = (int)Model->nv;
       for (int i = 0; i < nv; i++){
         Data->qfrc_applied[i] = 0.0;
       }
-
-      Debug.Log("Zeroed out applied forces after client disconnection");
     }
-
-    /// Generate help string from Commands array Optimized help message
-    /// generation with known length
+    
     private string GenerateHelpMessage() {
-      // Pre-allocate StringBuilder with exact capacity for efficiency
-      var sb = new System.Text.StringBuilder(NetHelpMessageLength +1); // +1 for  null  termination 
-
-      sb.AppendLine("=== AVAILABLE COMMANDS ===");
-      sb.AppendLine("Reset and GET_SENSORDATA Methods include d.time");
+      var sb = new StringBuilder(NetHelpMessageLength + 1);
+      sb.AppendLine("=== AVAILABLE COMMANDS (UDP) ===");
       sb.AppendLine("Response Codes: 0=SUCCESS, 1=ERROR");
       sb.AppendLine();
-
-      // Iterate through the Commands array
-      for (int i = 0; i < Commands.Length; i++) {
-        var cmd = Commands[i];
-        int value = (int)cmd.MsgHeader;
-        // Format: [value.0] NAME = description
-        sb.AppendLine($"[{value}.0] {cmd.Name}:");
-        sb.AppendLine($"  {cmd.HelpString}");
+      foreach (var cmd in Commands) {
+        sb.AppendLine($"[{ (int)cmd.MsgHeader }.0] {cmd.Name}:\n  {cmd.HelpString}");
       }
-
       sb.AppendLine("=== END COMMANDS ===");
-
-      string result = sb.ToString();
-
-      // Debug verification (can be removed in production)
-      int actualLength = System.Text.Encoding.UTF8.GetByteCount(result);
-      if (actualLength != NetHelpMessageLength) {
-        Debug.LogWarning($"Help message length mismatch! Expected: {NetHelpMessageLength}, Actual: {actualLength}");
-      }
-
-      return result;
+      return sb.ToString();
     }
 
     private static int CalculateHelpMessageLength(CommandInfo[] CommandsStruct) {
-      // Use Environment.NewLine for consistency with AppendLine()
-      string header = "=== AVAILABLE COMMANDS ===" + Environment.NewLine +
-        "Reset and GET_SENSORDATA Methods include d.time" + Environment.NewLine +
-        "Response Codes: 0=SUCCESS, 1=ERROR" + Environment.NewLine +
-        Environment.NewLine;
-
-      string footer = "=== END COMMANDS ===" + Environment.NewLine;
-
-      int totalLength = System.Text.Encoding.UTF8.GetByteCount(header) + 
-        System.Text.Encoding.UTF8.GetByteCount(footer);
-
-      for (int i = 0; i < CommandsStruct.Length; i++) {
-        var cmd = CommandsStruct[i];
-        int value = (int)cmd.MsgHeader;
-
-        string commandHeader = $"[{value}.0] {cmd.Name}:" + Environment.NewLine;
-        string commandContent = $"  {cmd.HelpString}";
-
-        totalLength += System.Text.Encoding.UTF8.GetByteCount(commandHeader);
-        totalLength += System.Text.Encoding.UTF8.GetByteCount(commandContent);
-      }
-
-      return totalLength;
+        string header = "=== AVAILABLE COMMANDS (UDP) ===" + Environment.NewLine +
+                        "Response Codes: 0=SUCCESS, 1=ERROR" + Environment.NewLine + Environment.NewLine;
+        string footer = "=== END COMMANDS ===" + Environment.NewLine;
+        int totalLength = Encoding.UTF8.GetByteCount(header) + Encoding.UTF8.GetByteCount(footer);
+        foreach (var cmd in CommandsStruct) {
+            string commandLine = $"[{(int)cmd.MsgHeader}.0] {cmd.Name}:\n  {cmd.HelpString}";
+            totalLength += Encoding.UTF8.GetByteCount(commandLine);
+        }
+        return totalLength;
     }
-
     #endregion
-
-    /// Apply control inputs to the simulation
-    // private unsafe float[] ApplyControlInputs(float[] data) {
-    //
-    //   // for (int l=3; l<data.Length; l++){
-    //   float []forces = {data[3], data[4],data[5],data[6],data[7],data[8]};
-    //   Debug.Log($"Applying Forces to motors: {data[3]},{data[4]},{data[5]},{data[6]},{data[7]},{data[8]}");
-    //   // }
-    //   lock (serverSimulationLock) {
-    //     for (int i = 0; i < 6; i++) {
-    //       pendingControlForces[i] = data[3 + i];
-    //     }
-    //     hasControlForces = true;
-    //   }
-    //
-    //   // Zero out forces!
-    //   // int nv = Model->nv;  // number of DoFs
-    //   // for (int i = 0; i < nv; i++) {
-    //   //     Data->qfrc_applied[i] = 0.0;
-    //   // }
-    //
-    //
-    //   // body_id: 1 # 1sub_body
-    //   // a1_id: 5 # Actuator 1
-    //   // a2_id: 6
-    //   // a3_id: 7
-    //   // a4_id: 8
-    //   // a5_id: 9
-    //   // a6_id: 10
-    //
-    //   /////////////////////////
-    //   // Hardcoded site IDs based on compiled model
-    //   // int[] siteIds = new int[] {
-    //   //     5, // a1
-    //   //     6, // a2
-    //   //     7, // a3
-    //   //     8,  // a4
-    //   //     9,  // a5
-    //   //     10  //a6
-    //   // };
-    //   //
-    //   // // Define force and torque to apply
-    //   // double [] myForce = new double[3] { 0.0, 0.0, 0.0}; // Apply along +Z
-    //   // double [] myTorque = new double[3] { 0.0, 0.0, 0.0 };
-    //   // int bodyId = 1;
-    //   // int j=0;
-    //   //
-    //   // foreach (int siteId in siteIds) {
-    //   //     // Point on body: site world position
-    //   //     double* point_on_body = Data->site_xpos + 3 * siteId;
-    //   //     myForce[2] = forces[j];
-    //   //
-    //   //     fixed (double* f = myForce)
-    //   //     fixed (double* t = myTorque) {
-    //   //         MujocoLib.mj_applyFT(Model, Data, f, t, point_on_body, bodyId, Data->qfrc_applied);
-    //   //     }
-    //   //
-    //   //     j+=1; // Increment Index of data
-    //   // }
-    //   /////////////////////////
-    //   return new float[] { 1.0f };
-    // }
-
-    /// Get current simulation state (positions, velocities)
-    private unsafe float[] GetCurrentState() {
-      int nq = (int)Model->nq;
-      int nv = (int)Model->nv;
-
-      // Create response with time, positions, and velocities
-      float[] response = new float[1 + nq + nv];
-
-      // Add time
-      response[0] = (float)Data->time;
-
-      // Add positions
-      for (int i = 0; i < nq; i++) {
-        response[1 + i] = (float)Data->qpos[i];
-      }
-
-      // Add velocities
-      for (int i = 0; i < nv; i++) {
-        response[1 + nq + i] = (float)Data->qvel[i];
-      }
-
-      return response;
-    }
-
   }
 
   public class MjStepArgs : EventArgs {
@@ -1746,4 +943,3 @@ namespace Mujoco {
     public readonly unsafe MujocoLib.mjData_* data;
   }
 }
-
