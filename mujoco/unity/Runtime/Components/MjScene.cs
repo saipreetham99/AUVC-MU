@@ -576,7 +576,7 @@ namespace Mujoco {
                 float effective_depth = (submersion_depth > height) ? height : submersion_depth;
                 float submerged_fraction = effective_depth / height;
                 float additional_buoyancy = max_additional_buoyancy_per_corner * submerged_fraction;
-                total_upward_force += additional_buoyancy + 2.367f + sliderController.GetSliderValue();
+                total_upward_force += additional_buoyancy + 2.367f ;
             }
             double[] myForce = new double[3] { 0.0, 0.0, total_upward_force };
             double* point_on_body = Data->site_xpos + 3 * siteIds[i];
