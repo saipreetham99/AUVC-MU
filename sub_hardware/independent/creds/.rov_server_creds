@@ -1,0 +1,15 @@
+[DEFAULT]
+# --- Ports for each service ---
+imu_and_depth_port = 5004
+thruster_port = 5005
+video_port = 5006
+# --- Other Settings ---
+video_quality = 75
+
+[lan]
+rov_ip = 192.168.2.11
+client_ip = 192.168.2.1
+
+[wifi]
+rov_ip = 192.168.2.246
+client_ip = 192.168.2.165
