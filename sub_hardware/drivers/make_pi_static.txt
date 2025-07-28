@@ -1,0 +1,18 @@
+ 1441  sudo apt update
+ 1442  sudo apt upgrade
+ 1443  cat /etc/network/interfaces
+ 1444  sudo systemctl restart dhcpcd
+ 1445  ip addr
+ 1446  sudo nvim /etc/dhcpcd.conf
+ 1447  ls /etc/dhcpcd.conf
+ 1448  systemctl status NetworkManager
+ 1449  systemctl status dhcpcd
+ 1450  systemctl status systemd-networkd
+ 1451  nmcli connection show
+ 1452  sudo nmcli connection delete "Wired connection 1"
+ 1453  nmcli connection show
+ 1454  sudo nmcli connection add type ethernet ifname eth0 con-name eth0-static ipv4.addresses 192.168.2.10/24 ipv4.method manual
+ 1455  nmcli connection show
+ 1456  sudo nmcli connection up eth0-static
+ 1457  ip addr show eth0
+ 1458  history
