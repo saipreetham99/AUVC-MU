@@ -30,6 +30,16 @@ import numpy as np
 import pygame
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
+try:
+    from external_controller import MyController
+
+    EXTERNAL_CONTROLLER_AVAILABLE = True
+    print(" External controller loaded successfully")
+except ImportError:
+    EXTERNAL_CONTROLLER_AVAILABLE = False
+    print(" External controller not found - only joystick control available")
+
+
 matplotlib.use("Agg")
 
 
@@ -373,7 +383,7 @@ class CombinedVisualizer:
             self.screen.blit(pending_surface, (10, 420))
         else:
             # Sync mode indicator
-            sync_indicator = "🔒 SYNC: Waiting for sim"
+            sync_indicator = " SYNC: Waiting for sim"
             sync_surface = self.font.render(sync_indicator, 1, (128, 200, 255))
             self.screen.blit(sync_surface, (10, 420))
 
@@ -403,6 +413,12 @@ class CombinedVisualizer:
         self.screen.blit(
             self.font.render(f"Move Scale: {trans_scale:.2f}", 1, (255, 255, 255)),
             (10, 135),
+        )
+
+        controller_mode = self.hud_data.get("controller_mode", "JOYSTICK")
+        mode_color = (0, 255, 0) if controller_mode == "JOYSTICK" else (255, 165, 0)
+        self.screen.blit(
+            self.font.render(f"CTRL: {controller_mode}", 1, mode_color), (10, 155)
         )
 
         # Get IMU data from real sub or use override from simulator
@@ -451,10 +467,12 @@ class CombinedVisualizer:
             depth_data = imu_data["depth"]
             depth_text = f"Depth: {depth_data['depth']['relative_cm']:6.1f}cm"
             self.screen.blit(self.font.render(depth_text, 1, (0, 255, 255)), (10, 230))
-            
+
             pressure_text = f"Press: {depth_data['pressure']['value']:6.1f}{depth_data['pressure']['units']}"
-            self.screen.blit(self.font.render(pressure_text, 1, (255, 255, 0)), (10, 250))
-            
+            self.screen.blit(
+                self.font.render(pressure_text, 1, (255, 255, 0)), (10, 250)
+            )
+
             temp_text = f"Temp:  {depth_data['temperature']['value']:6.1f}°C"
             self.screen.blit(self.font.render(temp_text, 1, (255, 255, 0)), (10, 270))
 
@@ -789,11 +807,24 @@ class BlueROVController:
         self.real_sub_client = RealSubmarineClient(sub_ip)
         self.data_receiver_thread = SubmarineDataReceiverThread()
 
+        # External controller state
+        self.external_controller_active = False
+        self.external_controller = None
+
+        if EXTERNAL_CONTROLLER_AVAILABLE:
+            try:
+                self.external_controller = MyController()
+                print(" External controller initialized and ready")
+            except Exception as e:
+                print(f" Failed to initialize external controller: {e}")
+                self.external_controller = None
+
         # Control state
         self.armed = False
         self.light_on = False
         self.stabilization_enabled = True
         self.sync_mode = initial_sync_mode  # 1 for Sync, 0 for Async
+        self.saved_sync_mode = self.sync_mode  # Save original sync mode
         print(f"Starting in {'SYNC' if self.sync_mode == 1 else 'ASYNC'} mode.")
 
         self.minForce, self.maxForce = np.full(6, -100), np.full(6, 100)
@@ -820,7 +851,13 @@ class BlueROVController:
         self.LEFT_STICK_X, self.LEFT_STICK_Y, self.RIGHT_STICK_X = 0, 1, 2
         self.LEFT_TRIGGER, self.RIGHT_TRIGGER = 4, 5
         self.BTN_A, self.BTN_B, self.BTN_X, self.BTN_Y = 0, 1, 2, 3
-        self.BTN_MENU, self.BTN_LEFT_STICK, self.BTN_LB, self.BTN_RB = 6, 7, 9, 10
+        self.BTN_BACK, self.BTN_MENU, self.BTN_LEFT_STICK, self.BTN_LB, self.BTN_RB = (
+            4,
+            6,
+            7,
+            9,
+            10,
+        )
         self.BTN_HAT_UP, self.BTN_HAT_DOWN, self.BTN_HAT_LEFT, self.BTN_HAT_RIGHT = (
             11,
             12,
@@ -835,6 +872,16 @@ class BlueROVController:
         # ADD: Live tuning variables
         self.live_num_steps = 5
         self.live_delay_ms = 0.0
+        print("CONTROLS:")
+        print("   MENU    - Arm/Disarm")
+        print("   BACK    - Toggle External Controller")
+        print("   A       - Reset Orientation & Depth")
+        print("   B       - Toggle Light")
+        print("   X       - Toggle Stabilization")
+        print("   LB      - Toggle Sync/Async Mode")
+        if EXTERNAL_CONTROLLER_AVAILABLE:
+            print("~~External Controller Available!")
+        print("")
 
     def apply_deadzone(self, v: float) -> float:
         if abs(v) < self.DEADZONE:
@@ -930,6 +977,72 @@ class BlueROVController:
         )
         return np.clip(total_forces, self.minForce, self.maxForce)
 
+    def get_external_controller_input(self) -> Tuple[float, float, float, float]:
+        """Get control input from external AI controller."""
+        if not self.external_controller:
+            return 0.0, 0.0, 0.0, 0.0
+
+        try:
+            # Get current sensor data
+            real_data = self.data_receiver_thread.latest_imu_data
+            image_frame = None
+
+            with self.data_receiver_thread.frame_lock:
+                if self.data_receiver_thread.latest_frame is not None:
+                    image_frame = self.data_receiver_thread.latest_frame.copy()
+
+            # Extract depth measurement
+            depth_measurement = None
+            if (
+                real_data
+                and "depth" in real_data
+                and real_data["depth"]
+                and "depth" in real_data["depth"]
+            ):
+                depth_measurement = real_data["depth"]["depth"]
+
+            # Call external controller
+            surge, strafe, heave, yaw_cmd = self.external_controller.update_loop(
+                image_frame, real_data, depth_measurement
+            )
+
+            # Apply scaling (external controller returns -1 to 1, scale to our system)
+            surge *= self.translation_scale
+            strafe *= self.translation_scale
+            heave *= self.translation_scale
+            yaw_cmd *= self.rotation_scale
+
+            return surge, strafe, heave, yaw_cmd
+
+        except Exception as e:
+            print(f" External controller error: {e}")
+            return 0.0, 0.0, 0.0, 0.0
+
+    def toggle_external_controller(self):
+        """Toggle between joystick and external controller."""
+        if not EXTERNAL_CONTROLLER_AVAILABLE or not self.external_controller:
+            print(" External controller not available")
+            return
+
+        self.external_controller_active = not self.external_controller_active
+
+        if self.external_controller_active:
+            # Switch to external controller
+            print(" EXTERNAL CONTROLLER ACTIVATED")
+            print("   - Controller will run in SYNC mode for safety")
+            print("   - Joystick still active for emergency override")
+
+            # Force sync mode for external controller
+            self.saved_sync_mode = self.sync_mode
+            self.sync_mode = 1
+
+        else:
+            # Switch back to joystick
+            print(" JOYSTICK CONTROLLER ACTIVATED")
+
+            # Restore original sync mode
+            self.sync_mode = self.saved_sync_mode
+
     async def send_real_sub_with_delay(self, armed, light_on, forces, delay_ms):
         """Send real submarine command with live-tunable delay"""
         # Apply live delay
@@ -966,6 +1079,9 @@ class BlueROVController:
                         if e.button == self.BTN_MENU:
                             self.armed = not self.armed
                             print(f"\n[{'ARMED' if self.armed else 'DISARMED'}]")
+                        elif e.button == self.BTN_BACK:
+                            print("\n Toggling controller mode...")
+                            self.toggle_external_controller()
                         elif e.button == self.BTN_X:
                             self.stabilization_enabled = not self.stabilization_enabled
                             print(
@@ -1027,15 +1143,45 @@ class BlueROVController:
                 if shutdown:
                     break
 
-                surge, strafe, heave, yaw_cmd = self.get_controller_input()
+                if self.external_controller_active:
+                    # External controller (always armed when active)
+                    surge, strafe, heave, yaw_cmd = self.get_external_controller_input()
+
+                    # Safety: Allow joystick override if significant input detected
+                    joystick_surge, joystick_strafe, joystick_heave, joystick_yaw = (
+                        self.get_controller_input()
+                    )
+
+                    # Check for emergency override (any significant joystick input)
+                    joystick_magnitude = (
+                        abs(joystick_surge)
+                        + abs(joystick_strafe)
+                        + abs(joystick_heave)
+                        + abs(joystick_yaw)
+                    )
+                    if joystick_magnitude > 0.1:  # Threshold for override
+                        print(" JOYSTICK OVERRIDE DETECTED - Using manual control")
+                        surge, strafe, heave, yaw_cmd = (
+                            joystick_surge,
+                            joystick_strafe,
+                            joystick_heave,
+                            joystick_yaw,
+                        )
+
+                else:
+                    # Normal joystick control
+                    surge, strafe, heave, yaw_cmd = self.get_controller_input()
 
                 real_data = self.data_receiver_thread.latest_imu_data
+
                 current_attitude_real = (
                     np.array(real_data["orientation"]["quaternion"])
-                    if real_data and "orientation" in real_data and real_data["orientation"] and "quaternion" in real_data["orientation"]
+                    if real_data
+                    and "orientation" in real_data
+                    and real_data["orientation"]
+                    and "quaternion" in real_data["orientation"]
                     else None
                 )
-
 
                 sim_data, current_attitude_sim = None, None
                 try:  # Prioritize getting simulator data for the main loop
@@ -1080,29 +1226,8 @@ class BlueROVController:
                     )
 
                 network_start = time.time()
-                ###################################
-                # try:
-                #     # FIXED: Dynamic timeout based on sync mode and num_steps
-                #     if self.sync_mode == 1:  # Sync mode
-                #         # Allow time for simulation steps to complete: base + (steps * time_per_step)
-                #         timeout = max(
-                #             2.0, 0.5 + (num_steps * 0.05)
-                #         )  # 50ms per step + 500ms base
-                #     else:  # Async mode
-                #         timeout = 0.1  # Fast timeout for async
-                #
-                #     await asyncio.wait_for(
-                #         asyncio.gather(*tasks, return_exceptions=True), timeout=timeout
-                #     )
-                # except asyncio.TimeoutError:
-                #     mode_name = "SYNC" if self.sync_mode == 1 else "ASYNC"
-                #     print(
-                #         f"Warning: {mode_name} commands timed out (timeout: {timeout:.2f}s)"
-                #     )
-                # self.network_times.append(time.time() - network_start)
 
-                ###################################
-                try:
+                try:  # SYNC/ASYNC
                     if self.sync_mode == 1:
                         print(f" SYNC: Waiting for {num_steps} steps to complete...")
                         # No timeout - let it take as long as needed
@@ -1114,7 +1239,7 @@ class BlueROVController:
                             asyncio.gather(*tasks, return_exceptions=True), timeout=0.1
                         )
                 except asyncio.TimeoutError:
-                    print("⚡ ASYNC timeout (expected)")
+                    print(" ASYNC timeout (expected)")
                 except Exception as e:
                     print(f"Network error: {e}")
                 finally:
@@ -1127,17 +1252,22 @@ class BlueROVController:
                 ###################################
 
                 # Update visualizer
+                controller_mode = (
+                    "EXTERNAL" if self.external_controller_active else "JOYSTICK"
+                )
                 self.visualizer.hud_data.update(
                     {
                         "armed": self.armed,
                         "light_on": self.light_on,
                         "stabilization": self.stabilization_enabled,
                         "sync_mode": self.sync_mode,
+                        "controller_mode": controller_mode,
                         "yaw_kp": self.pid_gains["yaw_sim"].kp,
                         "yaw_kp_real": self.pid_gains["yaw_real"].kp,
                         "trans_scale": self.translation_scale,
                     }
                 )
+
                 self.visualizer.update(imu_override=current_attitude_sim)
 
                 loop_time = time.time() - loop_start
