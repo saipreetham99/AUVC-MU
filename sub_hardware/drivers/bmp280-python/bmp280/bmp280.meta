@@ -1,0 +1,124 @@
+{
+  "0": {
+    "llType": "error",
+    "columns": [
+      {
+        "llabel": "error message",
+        "dtype": "str"
+      }
+    ]
+  },
+  "1": {
+    "llType": "data",
+    "columns": [
+      {
+        "llabel": "pressure",
+        "units": "hPa",
+        "dtype": "float",
+        "color": "darkorange"
+      },
+      {
+        "llabel": "temperature",
+        "units": "degC",
+        "dtype": "float",
+        "color": "firebrick"
+      },
+      {
+        "llabel": "pressure_raw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "temperature_raw",
+        "dtype": "int"
+      }
+    ]
+  },
+  "2": {
+    "llType": "config",
+    "columns": [
+      {
+        "llabel": "osrs_t",
+        "dtype": "int"
+      },
+      {
+        "llabel": "osrs_p",
+        "dtype": "int"
+      },
+      {
+        "llabel": "mode",
+        "dtype": "int"
+      },
+      {
+        "llabel": "t_sb",
+        "dtype": "int"
+      },
+      {
+        "llabel": "filter",
+        "dtype": "int"
+      },
+      {
+        "llabel": "CTRL",
+        "detail": "CTRL Register Byte",
+        "dtype": "int"
+      },
+      {
+        "llabel": "CFG",
+        "detail": "CFG Register Byte",
+        "dtype": "int"
+      }
+    ]
+  },
+  "5": {
+    "llType": "rom",
+    "columns": [
+      {
+        "llabel": "T1",
+        "dtype": "int"
+      },
+      {
+        "llabel": "T2",
+        "dtype": "int"
+      },
+      {
+        "llabel": "T3",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P1",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P2",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P3",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P4",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P5",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P6",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P7",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P8",
+        "dtype": "int"
+      },
+      {
+        "llabel": "P9",
+        "dtype": "int"
+      }
+    ]
+  }
+}

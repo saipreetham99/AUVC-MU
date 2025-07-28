@@ -1,0 +1,78 @@
+{
+  "0": {
+    "llType": "error",
+    "columns": [
+      {
+        "llabel": "error message",
+        "dtype": "str"
+      }
+    ]
+  },
+  "1": {
+    "llType": "data",
+    "columns": [
+      {
+        "llabel": "xRaw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "yRaw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "zRaw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "tRaw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "xScaled",
+        "dtype": "float"
+      },
+      {
+        "llabel": "yScaled",
+        "dtype": "float"
+      },
+      {
+        "llabel": "zScaled",
+        "dtype": "float"
+      },
+      {
+        "llabel": "tScaled",
+        "dtype": "float"
+      }
+    ]
+  },
+  "2": {
+    "llType": "configuration",
+    "columns": [
+      {
+        "llabel": "bandwidth",
+        "dtype": "float"
+      }
+    ]
+  },
+  "4": {
+    "llType": "calibration",
+    "columns": [
+      {
+        "llabel": "xOffset",
+        "dtype": "float"
+      },
+      {
+        "llabel": "yOffset",
+        "dtype": "float"
+      },
+      {
+        "llabel": "zOffset",
+        "dtype": "float"
+      },
+      {
+        "llabel": "tOffset",
+        "dtype": "float"
+      }
+    ]
+  }
+}

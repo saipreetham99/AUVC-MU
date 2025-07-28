@@ -1,0 +1,46 @@
+{
+  "0": {
+    "llType": "error",
+    "columns": [
+      {
+        "llabel": "message",
+        "dtype": "str"
+      }
+    ]
+  },
+  "1": {
+    "llType": "data",
+    "columns": [
+      {
+        "llabel": "xRaw",
+        "dtype": "int",
+        "color": "fuchsia"
+      },
+      {
+        "llabel": "yRaw",
+        "dtype": "int",
+        "color": "darkorchid"
+      },
+      {
+        "llabel": "zRaw",
+        "dtype": "int",
+        "color": "rebeccapurple"
+      },
+      {
+        "llabel": "xScaled",
+        "dtype": "float",
+        "color": "mediumblue"
+      },
+      {
+        "llabel": "yScaled",
+        "dtype": "float",
+        "color": "royalblue"
+      },
+      {
+        "llabel": "zScaled",
+        "dtype": "float",
+        "color": "slategrey"
+      }
+    ]
+  }
+}

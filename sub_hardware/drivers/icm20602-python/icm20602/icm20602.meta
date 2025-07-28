@@ -1,0 +1,93 @@
+{
+  "0": {
+    "llType": "error",
+    "columns": [
+      {
+        "llabel": "error message",
+        "dtype": "str"
+      }
+    ]
+  },
+  "1": {
+    "llType": "data",
+    "columns": [
+      {
+        "llabel": "ax",
+        "units": "g",
+        "dtype": "float",
+        "color": "blue",
+        "style": "x"
+      },
+      {
+        "llabel": "ay",
+        "units": "g",
+        "dtype": "float",
+        "color": "purple",
+        "style": "x"
+      },
+      {
+        "llabel": "az",
+        "units": "g",
+        "dtype": "float",
+        "color": "green",
+        "style": "x"
+      },
+      {
+        "llabel": "gx",
+        "units": "dps",
+        "dtype": "float",
+        "color": "red",
+        "style": "o"
+      },
+      {
+        "llabel": "gy",
+        "units": "dps",
+        "dtype": "float",
+        "color": "pink",
+        "style": "o"
+      },
+      {
+        "llabel": "gz",
+        "units": "dps",
+        "dtype": "float",
+        "color": "orange",
+        "style": "o"
+      },
+      {
+        "llabel": "t",
+        "units": "C",
+        "dtype": "float",
+        "color": "yellow",
+        "style": "."
+      },
+      {
+        "llabel": "ax_raw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "ay_raw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "az_raw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "gx_raw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "gy_raw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "gz_raw",
+        "dtype": "int"
+      },
+      {
+        "llabel": "t_raw",
+        "dtype": "int"
+      }
+    ]
+  }
+}
