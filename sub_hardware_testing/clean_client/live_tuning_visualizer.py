@@ -23,7 +23,6 @@ from enum import Enum
 from typing import Optional, Tuple
 
 import cv2
-
 # Use a non-interactive backend for Matplotlib
 import matplotlib
 import matplotlib.pyplot as plt
@@ -133,6 +132,20 @@ class CombinedVisualizer:
         self.plot_width = self.screen_width - self.camera_width
         self.screen_height = 480
 
+        self.active_input = None  # Which input box is active: 'steps' or 'delay'
+        self.steps_text = "5"  # Current steps input text
+        self.delay_text = "0"  # Current delay input text
+        self.input_values = {  # Return values for controller
+            "num_steps": 5,
+            "delay_ms": 0.0,
+        }
+
+        # Input box rectangles
+        # self.steps_box = pygame.Rect(self.camera_width + 10, 350, 80, 25)
+        # self.delay_box = pygame.Rect(self.camera_width + 10, 385, 80, 25)
+        self.steps_box = pygame.Rect(120, 350, 80, 25)
+        self.delay_box = pygame.Rect(160, 385, 80, 25)
+
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
         pygame.display.set_caption("Submarine Control Dashboard")
         self.font = pygame.font.SysFont("monospace", 16)
@@ -234,6 +247,72 @@ class CombinedVisualizer:
             ]
         )
 
+    def handle_input_events(self, events):
+        """Handle text input events. Call this from your main event loop."""
+        updated_values = {}
+
+        for event in events:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                # Check if clicked on input boxes
+                if self.steps_box.collidepoint(event.pos):
+                    self.active_input = "steps"
+                elif self.delay_box.collidepoint(event.pos):
+                    self.active_input = "delay"
+                else:
+                    self.active_input = None
+
+            elif event.type == pygame.KEYDOWN and self.active_input:
+                if event.key == pygame.K_RETURN or event.key == pygame.K_TAB:
+                    # Submit current input
+                    if self.active_input == "steps":
+                        try:
+                            new_steps = int(self.steps_text)
+                            if 1 <= new_steps <= 100:
+                                self.input_values["num_steps"] = new_steps
+                                updated_values["num_steps"] = new_steps
+                                print(f"🔧 Updated steps: {new_steps}")
+                        except ValueError:
+                            self.steps_text = str(self.input_values["num_steps"])
+
+                    elif self.active_input == "delay":
+                        try:
+                            new_delay = float(self.delay_text)
+                            if 0 <= new_delay <= 1000:
+                                self.input_values["delay_ms"] = new_delay
+                                updated_values["delay_ms"] = new_delay
+                                print(f"🔧 Updated delay: {new_delay}ms")
+                        except ValueError:
+                            self.delay_text = str(self.input_values["delay_ms"])
+
+                    self.active_input = None
+
+                elif event.key == pygame.K_ESCAPE:
+                    self.active_input = None
+
+                elif event.key == pygame.K_BACKSPACE:
+                    # Remove last character
+                    if self.active_input == "steps":
+                        self.steps_text = self.steps_text[:-1]
+                    elif self.active_input == "delay":
+                        self.delay_text = self.delay_text[:-1]
+
+                else:
+                    # Add character
+                    char = event.unicode
+                    if char.isprintable():
+                        if self.active_input == "steps" and (
+                            char.isdigit() or char == "."
+                        ):
+                            if len(self.steps_text) < 6:  # Limit length
+                                self.steps_text += char
+                        elif self.active_input == "delay" and (
+                            char.isdigit() or char == "."
+                        ):
+                            if len(self.delay_text) < 8:  # Limit length
+                                self.delay_text += char
+
+        return updated_values
+
     def update(self, imu_override: Optional[np.ndarray] = None):
         self.screen.fill((25, 25, 25))
 
@@ -291,12 +370,12 @@ class CombinedVisualizer:
                 color = (128, 255, 128)  # Light green
 
             pending_surface = self.font.render(pending_indicator, 1, color)
-            self.screen.blit(pending_surface, (10, 400))
+            self.screen.blit(pending_surface, (10, 420))
         else:
             # Sync mode indicator
             sync_indicator = "🔒 SYNC: Waiting for sim"
             sync_surface = self.font.render(sync_indicator, 1, (128, 200, 255))
-            self.screen.blit(sync_surface, (10, 400))
+            self.screen.blit(sync_surface, (10, 420))
 
         # Rest of HUD display (unchanged)
         light_text = "ON" if self.hud_data["light_on"] else "OFF"
@@ -335,34 +414,61 @@ class CombinedVisualizer:
             y_angle = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y**2 + z**2))
 
             imu_data = {
-                "quaternion": imu_override,
-                "euler_deg": {
-                    "roll": np.degrees(r),
-                    "pitch": np.degrees(p),
-                    "yaw": np.degrees(y_angle),
+                "orientation": {
+                    "quaternion": imu_override,
+                    "euler_deg": {
+                        "roll": np.degrees(r),
+                        "pitch": np.degrees(p),
+                        "yaw": np.degrees(y_angle),
+                    },
                 },
+                "depth": None,
             }
 
         # Display attitude information
-        if imu_data and "euler_deg" in imu_data:
+        # if imu_data and "euler_deg" in imu_data:
+        if (
+            imu_data
+            and "orientation" in imu_data
+            and imu_data["orientation"]
+            and "euler_deg" in imu_data["orientation"]
+        ):
+
             pygame.draw.line(self.screen, (100, 100, 100), (10, 160), (200, 160), 1)
-            roll_text = f"Roll:  {imu_data['euler_deg']['roll']:6.1f}°"
+            roll_text = f"Roll:  {imu_data['orientation']['euler_deg']['roll']:6.1f}°"
             self.screen.blit(self.font.render(roll_text, 1, (255, 255, 255)), (10, 170))
-            pitch_text = f"Pitch: {imu_data['euler_deg']['pitch']:6.1f}°"
+
+            pitch_text = f"Pitch: {imu_data['orientation']['euler_deg']['pitch']:6.1f}°"
             self.screen.blit(
                 self.font.render(pitch_text, 1, (255, 255, 255)), (10, 190)
             )
-            yaw_text = f"Yaw:   {imu_data['euler_deg']['yaw']:6.1f}°"
+
+            yaw_text = f"Yaw:   {imu_data['orientation']['euler_deg']['yaw']:6.1f}°"
             self.screen.blit(self.font.render(yaw_text, 1, (255, 255, 255)), (10, 210))
+
+        # Add depth display section:
+        if imu_data and "depth" in imu_data and imu_data["depth"]:
+            depth_data = imu_data["depth"]
+            depth_text = f"Depth: {depth_data['depth']['relative_cm']:6.1f}cm"
+            self.screen.blit(self.font.render(depth_text, 1, (0, 255, 255)), (10, 230))
+            
+            pressure_text = f"Press: {depth_data['pressure']['value']:6.1f}{depth_data['pressure']['units']}"
+            self.screen.blit(self.font.render(pressure_text, 1, (255, 255, 0)), (10, 250))
+            
+            temp_text = f"Temp:  {depth_data['temperature']['value']:6.1f}°C"
+            self.screen.blit(self.font.render(temp_text, 1, (255, 255, 0)), (10, 270))
 
         # Update 3D visualization
         if (
             imu_data
-            and "quaternion" in imu_data
-            and not np.any(np.isnan(imu_data["quaternion"]))
+            and "orientation" in imu_data
+            and imu_data["orientation"]
+            and "quaternion" in imu_data["orientation"]
+            and not np.any(np.isnan(imu_data["orientation"]["quaternion"]))
         ):
 
-            q = np.array(imu_data["quaternion"])
+            # q = np.array(imu_data["quaternion"])
+            q = np.array(imu_data["orientation"]["quaternion"])
             R = self.rotation_fix @ self._quaternion_to_rotation_matrix(q)
             x_ax, y_ax, z_ax = R[:, 0], R[:, 1], R[:, 2]
 
@@ -386,6 +492,83 @@ class CombinedVisualizer:
         else:
             self.pyramid_collection.set_verts([])
             self.ax_3d.set_title("3D Orientation (Waiting...)")
+
+        # ADD: Live tuning input boxes (insert after existing HUD elements)
+        # Draw input boxes
+        steps_color = (
+            (255, 255, 255) if self.active_input == "steps" else (100, 100, 100)
+        )
+        delay_color = (
+            (255, 255, 255) if self.active_input == "delay" else (100, 100, 100)
+        )
+
+        # Steps input box
+        pygame.draw.rect(self.screen, (50, 50, 50), self.steps_box)
+        pygame.draw.rect(self.screen, steps_color, self.steps_box, 2)
+
+        # Delay input box
+        pygame.draw.rect(self.screen, (50, 50, 50), self.delay_box)
+        pygame.draw.rect(self.screen, delay_color, self.delay_box, 2)
+
+        # Labels
+        self.screen.blit(self.font.render("Sim Steps:", 1, (255, 255, 255)), (10, 355))
+        self.screen.blit(
+            self.font.render("Sub Delay (ms):", 1, (255, 255, 255)), (10, 390)
+        )
+
+        # Input text
+        steps_surface = self.font.render(self.steps_text, 1, (255, 255, 255))
+        delay_surface = self.font.render(self.delay_text, 1, (255, 255, 255))
+
+        self.screen.blit(steps_surface, (self.steps_box.x + 5, self.steps_box.y + 5))
+        self.screen.blit(delay_surface, (self.delay_box.x + 5, self.delay_box.y + 5))
+
+        # Cursor for active input
+        if self.active_input == "steps":
+            cursor_x = self.steps_box.x + 5 + steps_surface.get_width()
+            pygame.draw.line(
+                self.screen,
+                (255, 255, 255),
+                (cursor_x, self.steps_box.y + 5),
+                (cursor_x, self.steps_box.y + 20),
+                2,
+            )
+        elif self.active_input == "delay":
+            cursor_x = self.delay_box.x + 5 + delay_surface.get_width()
+            pygame.draw.line(
+                self.screen,
+                (255, 255, 255),
+                (cursor_x, self.delay_box.y + 5),
+                (cursor_x, self.delay_box.y + 20),
+                2,
+            )
+
+        # Current values display
+        current_steps = self.input_values["num_steps"]
+        current_delay = self.input_values["delay_ms"]
+
+        self.screen.blit(
+            self.font.render(
+                f"Active: {current_steps} steps, {current_delay:.0f}ms delay",
+                1,
+                (0, 255, 255),
+            ),
+            (self.camera_width + 10, 420),
+        )
+
+        # Instructions
+        if self.active_input:
+            self.screen.blit(
+                self.font.render(
+                    "Press ENTER to apply, ESC to cancel", 1, (255, 255, 0)
+                ),
+                (self.camera_width + 10, 440),
+            )
+        else:
+            self.screen.blit(
+                self.font.render("Click boxes to edit values", 1, (128, 128, 128)),
+                (self.camera_width + 10, 440),
+            )
 
         # Render matplotlib plot to pygame surface
         self.fig.canvas.draw()
@@ -603,7 +786,7 @@ class BlueROVController:
         self.controller.init()
         print(f"Gamepad: {self.controller.get_name()}")
 
-        self.real_sub_client = RealSubmarineClient(sub_ip) if sub_ip else None
+        self.real_sub_client = RealSubmarineClient(sub_ip)
         self.data_receiver_thread = SubmarineDataReceiverThread()
 
         # Control state
@@ -648,6 +831,10 @@ class BlueROVController:
 
         self.DEADZONE, self.dt, self.last_tuning_time = 0.1, 0.02, 0.0
         self.loop_times, self.network_times = [], []
+
+        # ADD: Live tuning variables
+        self.live_num_steps = 5
+        self.live_delay_ms = 0.0
 
     def apply_deadzone(self, v: float) -> float:
         if abs(v) < self.DEADZONE:
@@ -743,6 +930,17 @@ class BlueROVController:
         )
         return np.clip(total_forces, self.minForce, self.maxForce)
 
+    async def send_real_sub_with_delay(self, armed, light_on, forces, delay_ms):
+        """Send real submarine command with live-tunable delay"""
+        # Apply live delay
+        if delay_ms > 0:
+            await asyncio.sleep(delay_ms / 1000.0)
+
+        # Send command
+        await asyncio.get_event_loop().run_in_executor(
+            None, self.real_sub_client.send_control, armed, light_on, forces
+        )
+
     async def run_controller_async(self, num_steps, fwcmd, runtime):
         print("🚀 Starting ASYNC controller loop. Press MENU to arm.")
         self.visualizer = CombinedVisualizer(self.data_receiver_thread)
@@ -758,7 +956,8 @@ class BlueROVController:
                 if time.time() - cmdstarttime > runtime + 0.1:
                     shutdown = True
 
-                for e in pygame.event.get():
+                events = pygame.event.get()
+                for e in events:
                     if e.type == pygame.QUIT:
                         shutdown = True
                         break
@@ -817,6 +1016,14 @@ class BlueROVController:
                                 f"\n🔧 Tuned: SimKp={self.pid_gains['yaw_sim'].kp:.2f}, RealKp={self.pid_gains['yaw_real'].kp:.2f}"
                             )
 
+                updated_values = self.visualizer.handle_input_events(events)
+
+                # Handle values from input boxes
+                if "num_steps" in updated_values:
+                    self.live_num_steps = updated_values["num_steps"]
+                if "delay_ms" in updated_values:
+                    self.live_delay_ms = updated_values["delay_ms"]
+
                 if shutdown:
                     break
 
@@ -824,10 +1031,11 @@ class BlueROVController:
 
                 real_data = self.data_receiver_thread.latest_imu_data
                 current_attitude_real = (
-                    np.array(real_data["quaternion"])
-                    if real_data and "quaternion" in real_data
+                    np.array(real_data["orientation"]["quaternion"])
+                    if real_data and "orientation" in real_data and real_data["orientation"] and "quaternion" in real_data["orientation"]
                     else None
                 )
+
 
                 sim_data, current_attitude_sim = None, None
                 try:  # Prioritize getting simulator data for the main loop
@@ -859,17 +1067,15 @@ class BlueROVController:
 
                 tasks = [
                     self.auv.apply_ctrl(
-                        sim_f if self.armed else np.zeros(6), num_steps, self.sync_mode
+                        sim_f if self.armed else np.zeros(6),
+                        self.live_num_steps,
+                        self.sync_mode,
                     )
                 ]
                 if self.real_sub_client:
                     tasks.append(
-                        asyncio.get_event_loop().run_in_executor(
-                            None,
-                            self.real_sub_client.send_control,
-                            self.armed,
-                            self.light_on,
-                            real_f,
+                        self.send_real_sub_with_delay(
+                            self.armed, self.light_on, real_f, self.live_delay_ms
                         )
                     )
 
@@ -910,12 +1116,12 @@ class BlueROVController:
                 except asyncio.TimeoutError:
                     print("⚡ ASYNC timeout (expected)")
                 except Exception as e:
-                    print(f"❌ Network error: {e}")
+                    print(f"Network error: {e}")
                 finally:
                     pass
 
                 network_time = (time.time() - network_start) * 1000  # Convert to ms
-                # print(f"📊 Network time: {network_time:.1f}ms")
+                # print(f"Network time: {network_time:.1f}ms")
                 self.network_times.append(network_time / 1000)  # Store in seconds
 
                 ###################################
@@ -978,7 +1184,7 @@ if __name__ == "__main__":
         "--num_steps", type=int, default=1, help="Simulator physics steps per cycle."
     )
     parser.add_argument(
-        "--sub_ip", type=str, default=None, help="IP of real submarine."
+        "--sub_ip", type=str, default="192.168.2.11", help="IP of real submarine."
     )
     parser.add_argument(
         "--fwcmd", type=float, default=2.0, help="Time duration to apply forward force."
