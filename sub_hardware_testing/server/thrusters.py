@@ -2,28 +2,34 @@
 import time
 import logging
 
+# Get a logger for this module
+logger = logging.getLogger(__name__)
+
 try:
     from pca9685 import PCA9685
+    IS_MOCK = False
 except ImportError:
-    logging.critical("Failed to import pca9685. Is the library installed? Using mock interface.")
+    logger.critical("Failed to import pca9685 library. Using mock interface.")
+    IS_MOCK = True
     # Define a mock class that accurately reflects the real library's API
     class PCA9685:
-        def __init__(self): 
-            # The real library uses a .pwm attribute that can be assigned to.
+        def __init__(self, i2c, address=0x40): 
+            self._i2c = i2c
+            self._address = address
             self.pwm = [0]*16
-            logging.info("Mock PCA: Initialized.")
+            logger.info("Mock PCA: Initialized.")
         def set_pwm_frequency(self, freq): 
-            logging.info(f"Mock PCA: Freq set to {freq}Hz")
+            logger.info(f"Mock PCA: Freq set to {freq}Hz")
         def output_enable(self): 
-            logging.info("Mock PCA: Output enabled.")
+            logger.info(f"Mock PCA: Output enabled.")
         def output_disable(self): 
-            logging.info("Mock PCA: Output disabled.")
+            logger.info(f"Mock PCA: Output disabled.")
+
 
 class ThrusterController:
     """
     Manages the PCA9685 board to control 6 thrusters and 1 light.
-    Handles safe startup and shutdown procedures.
-    THIS VERSION USES DIRECT PULSE WIDTH ASSIGNMENT.
+    Handles safe startup and shutdown procedures and hardware failures.
     """
     NEUTRAL_PULSE = 1500
     LIGHT_OFF_PULSE = 1100
@@ -31,49 +37,70 @@ class ThrusterController:
     LIGHT_CHANNEL = 9
 
     def __init__(self):
-        logging.info("Initializing Thruster Controller (PCA9685)...")
-        self.pca = PCA9685()
-        self.pca.set_pwm_frequency(50)
-        # Set all outputs to a known safe state on startup
-        self.set_neutral()
-        self.pca.output_enable()
-        logging.info("Thruster ESCs initialized. Audible sound should occur now.")
+        """
+        Initializes the Thruster Controller. Sets an 'initialized' flag to indicate
+        success or failure, as __init__ cannot return a value.
+        """
+        self.initialized = False
+        self.pca = None
+        
+        try:
+            logger.info("Initializing Thruster Controller (PCA9685)...")
+            
+            if IS_MOCK:
+                # The mock will always "succeed" without needing other libraries
+                self.pca = PCA9685(i2c=None)
+            else:
+                # For real hardware, we need board and busio. Import them here.
+                # If these imports fail, the except block will catch it.
+                import board
+                import busio
+                
+                i2c = busio.I2C(board.SCL, board.SDA)
+                self.pca = PCA9685(i2c)
+
+            self.pca.set_pwm_frequency(50)
+            self.set_neutral()
+            self.pca.output_enable()
+            
+            logger.info("Thruster ESCs initialized. Audible sound should occur now.")
+            self.initialized = True
+
+        except Exception as e:
+            # This will now correctly catch any error: missing pca9685, board, busio, or I2C hardware error.
+            logger.error(f"Failed to initialize Thruster Controller (PCA9685): {e}")
+            logger.warning("Thruster control will be disabled.")
+            # self.initialized remains False
 
     def set_neutral(self):
-        """Sets all thrusters to neutral and turns off the light by directly assigning pulse values."""
+        """Sets all thrusters to neutral and turns off the light."""
+        if not self.initialized:
+            return
         for ch in self.THRUSTER_CHANNELS:
-            # Directly assign the pulse width value. This is the correct logic.
             self.pca.pwm[ch] = self.NEUTRAL_PULSE
-            
         self.pca.pwm[self.LIGHT_CHANNEL] = self.LIGHT_OFF_PULSE
-        time.sleep(0.05) # Allow time for commands to process
+        time.sleep(0.05)
 
     def apply_control(self, thruster_pulses, light_pulse, duration):
-        """
-        Applies specified pulse values directly to the PCA9685 board's channels.
-
-        Args:
-            thruster_pulses (list[int]): A list of 6 integer pulse values (e.g., 1100-1900).
-            light_pulse (int): The integer pulse value for the light.
-            duration (float): The time in seconds to hold these values.
-        """
+        """Applies specified pulse values to the PCA9685 board's channels."""
+        if not self.initialized:
+            return
+            
         if len(thruster_pulses) != 6:
-            logging.error(f"Invalid thruster pulse count: {len(thruster_pulses)}. Expected 6.")
+            logger.error(f"Invalid thruster pulse count: {len(thruster_pulses)}. Expected 6.")
             return
 
-        # Assign each thruster pulse directly to its channel.
         for i, pulse in enumerate(thruster_pulses):
             self.pca.pwm[self.THRUSTER_CHANNELS[i]] = pulse
         
-        # Assign the light pulse directly.
         self.pca.pwm[self.LIGHT_CHANNEL] = light_pulse
-
-        # The client-server loop depends on this sleep to maintain the command rate.
         time.sleep(duration)
         
     def safe_shutdown(self):
         """Sets all outputs to a safe state and disables the PCA9685 driver."""
-        logging.info("Executing safe thruster shutdown...")
+        if not self.initialized:
+            return
+        logger.info("Executing safe thruster shutdown...")
         self.set_neutral()
         self.pca.output_disable()
-        logging.info("Thruster shutdown complete.")
+        logger.info("Thruster shutdown complete.")

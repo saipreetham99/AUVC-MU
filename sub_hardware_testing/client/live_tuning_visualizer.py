@@ -20,6 +20,7 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
+from collections import deque
 from typing import Optional, Tuple
 
 import cv2
@@ -137,10 +138,11 @@ class CombinedVisualizer:
 
     def __init__(self, data_receiver):
         self.data_receiver = data_receiver
-        self.screen_width = 1280
+        self.screen_width = 1920  # Increase width for third panel
         self.camera_width = 640
-        self.plot_width = self.screen_width - self.camera_width
         self.screen_height = 480
+        self.plot_width = (self.screen_width - self.camera_width) // 2  # Split remaining space
+        self.comparison_width = self.plot_width
 
         self.active_input = None  # Which input box is active: 'steps' or 'delay'
         self.steps_text = "5"  # Current steps input text
@@ -153,7 +155,7 @@ class CombinedVisualizer:
         # Input box rectangles
         # self.steps_box = pygame.Rect(self.camera_width + 10, 350, 80, 25)
         # self.delay_box = pygame.Rect(self.camera_width + 10, 385, 80, 25)
-        self.steps_box = pygame.Rect(120, 350, 80, 25)
+        self.steps_box = pygame.Rect(160, 350, 80, 25)
         self.delay_box = pygame.Rect(160, 385, 80, 25)
 
         self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
@@ -181,6 +183,23 @@ class CombinedVisualizer:
         ]
         self.pyramid_face_colors = ["cyan", "cyan", "cyan", "cyan", "red"]
 
+        # Comparison plot data storage
+        self.time_window_size = 30.0  # 30 second window
+        history_length = int(self.time_window_size * 50)  # 30s at 50Hz
+        self.start_time = time.time()
+
+        # History deques for real submarine
+        self.real_times = deque(maxlen=history_length)
+        self.real_roll = deque(maxlen=history_length)
+        self.real_pitch = deque(maxlen=history_length)
+        self.real_yaw = deque(maxlen=history_length)
+
+        # History deques for simulation
+        self.sim_times = deque(maxlen=history_length)
+        self.sim_roll = deque(maxlen=history_length)
+        self.sim_pitch = deque(maxlen=history_length)
+        self.sim_yaw = deque(maxlen=history_length)
+
         # Setup matplotlib plot
         plot_dpi = 100
         fig_size = (self.plot_width / plot_dpi, self.screen_height / plot_dpi)
@@ -197,6 +216,8 @@ class CombinedVisualizer:
 
         self.setup_3d_plot()
         self.rotation_fix = np.eye(3)
+        # Live Sliding Window Plot
+        self.setup_comparison_plot()
 
         self.hud_data = {
             "armed": False,
@@ -221,7 +242,7 @@ class CombinedVisualizer:
         except AttributeError:
             pass
 
-        self.ax_3d.view_init(elev=15, azim=90)
+        self.ax_3d.view_init(elev=25, azim=35)
 
         # Create frame lines for coordinate axes
         colors = ["red", "green", "blue"]
@@ -263,6 +284,14 @@ class CombinedVisualizer:
 
         for event in events:
             if event.type == pygame.MOUSEBUTTONDOWN:
+                # --- Check for checkbox clicks ---
+                for label, rect in self.checkboxes.items():
+                    if rect.collidepoint(event.pos):
+                        self.plot_visibility[label] = not self.plot_visibility[label]
+                        # Prevent activating input boxes if a checkbox was clicked
+                        self.active_input = None 
+                        return {} # Exit early as we've handled the event
+
                 # Check if clicked on input boxes
                 if self.steps_box.collidepoint(event.pos):
                     self.active_input = "steps"
@@ -280,7 +309,7 @@ class CombinedVisualizer:
                             if 1 <= new_steps <= 100:
                                 self.input_values["num_steps"] = new_steps
                                 updated_values["num_steps"] = new_steps
-                                print(f"🔧 Updated steps: {new_steps}")
+                                print(f" Updated steps: {new_steps}")
                         except ValueError:
                             self.steps_text = str(self.input_values["num_steps"])
 
@@ -290,7 +319,7 @@ class CombinedVisualizer:
                             if 0 <= new_delay <= 1000:
                                 self.input_values["delay_ms"] = new_delay
                                 updated_values["delay_ms"] = new_delay
-                                print(f"🔧 Updated delay: {new_delay}ms")
+                                print(f" Updated delay: {new_delay}ms")
                         except ValueError:
                             self.delay_text = str(self.input_values["delay_ms"])
 
@@ -322,6 +351,135 @@ class CombinedVisualizer:
                                 self.delay_text += char
 
         return updated_values
+
+    def _draw_plot_checkboxes(self):
+        """Draws the plot toggle checkboxes onto the screen."""
+        for label, rect in self.checkboxes.items():
+            # Draw the box
+            pygame.draw.rect(self.screen, (200, 200, 200), rect, 1)
+            
+            # Draw the checkmark if visible
+            if self.plot_visibility[label]:
+                pygame.draw.line(self.screen, (0, 255, 128), (rect.x + 3, rect.y + 10), (rect.x + 8, rect.y + 15), 2)
+                pygame.draw.line(self.screen, (0, 255, 128), (rect.x + 8, rect.y + 15), (rect.x + 15, rect.y + 5), 2)
+            
+            # Draw the label
+            label_surface = self.font.render(label, 1, (0, 0, 0))
+            self.screen.blit(label_surface, (rect.right + 10, rect.y + 2))
+
+    def setup_comparison_plot(self):
+        """Setup the RPY comparison plot."""
+        # Position for comparison plot (rightmost panel)
+        plot_dpi = 100
+        fig_size = (self.comparison_width / plot_dpi, self.screen_height / plot_dpi)
+        
+        self.comparison_fig = plt.figure(figsize=fig_size, dpi=plot_dpi)
+        self.comparison_ax = self.comparison_fig.add_subplot(1, 1, 1)
+        
+        # Plot lines for real submarine (solid lines)
+        self.real_roll_line, = self.comparison_ax.plot([], [], 'r-', lw=2, label='Real Roll', alpha=0.8)
+        self.real_pitch_line, = self.comparison_ax.plot([], [], 'g-', lw=2, label='Real Pitch', alpha=0.8)
+        self.real_yaw_line, = self.comparison_ax.plot([], [], 'b-', lw=2, label='Real Yaw', alpha=0.8)
+        
+        # Plot lines for simulation (dashed lines)
+        self.sim_roll_line, = self.comparison_ax.plot([], [], 'r--', lw=2, label='Sim Roll', alpha=0.6)
+        self.sim_pitch_line, = self.comparison_ax.plot([], [], 'g--', lw=2, label='Sim Pitch', alpha=0.6)
+        self.sim_yaw_line, = self.comparison_ax.plot([], [], 'b--', lw=2, label='Sim Yaw', alpha=0.6)
+        
+        self.comparison_ax.set_xlabel('Time (s)')
+        self.comparison_ax.set_ylabel('Angle (degrees)')
+        self.comparison_ax.set_title('Real vs Sim RPY Comparison')
+        self.comparison_ax.legend(loc='upper left', fontsize=8)
+        self.comparison_ax.set_ylim(-180, 180)
+        self.comparison_ax.grid(True, alpha=0.3)
+        self.comparison_ax.set_xlim(0, self.time_window_size)
+        
+        self.comparison_fig.tight_layout(pad=0.5)
+
+        # --- Checkbox setup for plot visibility ---
+        self.plot_visibility = {
+            'Roll': True, 
+            'Pitch': True, 
+            'Yaw': True,
+        }
+        
+        # Define checkbox rectangles and labels for Roll, Pitch, Yaw
+        self.checkboxes = {}
+        checkbox_x_start = self.camera_width + self.plot_width - 50
+        # Adjust vertical start position for better centering
+        checkbox_y_start = self.screen_height - 150 
+        y_offset = 0
+        for label in self.plot_visibility.keys():
+            rect = pygame.Rect(checkbox_x_start, checkbox_y_start + y_offset, 20, 20)
+            self.checkboxes[label] = rect
+            y_offset += 35 # Increase vertical spacing between checkboxes
+
+    def update_comparison_data(self, real_imu_data, sim_quaternion):
+        """Update comparison plot data with latest readings."""
+        current_time = time.time() - self.start_time
+        
+        # Process real submarine data
+        if (real_imu_data and "orientation" in real_imu_data and 
+            real_imu_data["orientation"] and "euler_deg" in real_imu_data["orientation"]):
+            
+            euler = real_imu_data["orientation"]["euler_deg"]
+            self.real_times.append(current_time)
+            self.real_roll.append(euler["roll"])
+            self.real_pitch.append(euler["pitch"])
+            self.real_yaw.append(euler["yaw"])
+        
+        # Process simulation data
+        if sim_quaternion is not None and len(sim_quaternion) == 4:
+            # Convert quaternion to euler (same as old code)
+            w, x, y, z = sim_quaternion
+            roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x**2 + y**2))
+            sinp = 2 * (w * y - z * x)
+            pitch = np.arcsin(np.clip(sinp, -1, 1))
+            yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y**2 + z**2))
+            
+            self.sim_times.append(current_time)
+            self.sim_roll.append(np.degrees(roll))
+            self.sim_pitch.append(np.degrees(pitch))
+            self.sim_yaw.append(np.degrees(yaw))
+
+    def update_comparison_plot(self):
+        """Update the comparison plot lines based on visibility for each axis."""
+        
+        # Update Roll plots (Real and Sim) based on a single 'Roll' checkbox
+        if self.plot_visibility['Roll']:
+            if len(self.real_times) > 1:
+                self.real_roll_line.set_data(list(self.real_times), list(self.real_roll))
+            if len(self.sim_times) > 1:
+                self.sim_roll_line.set_data(list(self.sim_times), list(self.sim_roll))
+        else:
+            self.real_roll_line.set_data([], [])
+            self.sim_roll_line.set_data([], [])
+
+        # Update Pitch plots (Real and Sim) based on a single 'Pitch' checkbox
+        if self.plot_visibility['Pitch']:
+            if len(self.real_times) > 1:
+                self.real_pitch_line.set_data(list(self.real_times), list(self.real_pitch))
+            if len(self.sim_times) > 1:
+                self.sim_pitch_line.set_data(list(self.sim_times), list(self.sim_pitch))
+        else:
+            self.real_pitch_line.set_data([], [])
+            self.sim_pitch_line.set_data([], [])
+
+        # Update Yaw plots (Real and Sim) based on a single 'Yaw' checkbox
+        if self.plot_visibility['Yaw']:
+            if len(self.real_times) > 1:
+                self.real_yaw_line.set_data(list(self.real_times), list(self.real_yaw))
+            if len(self.sim_times) > 1:
+                self.sim_yaw_line.set_data(list(self.sim_times), list(self.sim_yaw))
+        else:
+            self.real_yaw_line.set_data([], [])
+            self.sim_yaw_line.set_data([], [])
+            
+        # Update time window (this part remains the same)
+        if len(self.real_times) > 1:
+            times = list(self.real_times)
+            if times and times[-1] > self.time_window_size:
+                self.comparison_ax.set_xlim(times[-1] - self.time_window_size, times[-1])
 
     def update(self, imu_override: Optional[np.ndarray] = None):
         self.screen.fill((25, 25, 25))
@@ -403,22 +561,22 @@ class CombinedVisualizer:
             self.font.render(
                 f"Sim Kp: {self.hud_data['yaw_kp']:.2f}", 1, (255, 255, 255)
             ),
-            (10, 95),
+            (10, 110),  # Changed from 95
         )
         real_kp = self.hud_data.get("yaw_kp_real", 0.0)
         self.screen.blit(
-            self.font.render(f"Real Kp: {real_kp:.2f}", 1, (255, 255, 255)), (10, 115)
+            self.font.render(f"Real Kp: {real_kp:.2f}", 1, (255, 255, 255)), (10, 130)  # Changed from 115
         )
         trans_scale = self.hud_data.get("trans_scale", 0.8)
         self.screen.blit(
             self.font.render(f"Move Scale: {trans_scale:.2f}", 1, (255, 255, 255)),
-            (10, 135),
+            (10, 150),  # Changed from 135
         )
 
         controller_mode = self.hud_data.get("controller_mode", "JOYSTICK")
         mode_color = (0, 255, 0) if controller_mode == "JOYSTICK" else (255, 165, 0)
         self.screen.blit(
-            self.font.render(f"CTRL: {controller_mode}", 1, mode_color), (10, 155)
+            self.font.render(f"CTRL: {controller_mode}", 1, mode_color), (10, 170)  # Changed from 155
         )
 
         # Get IMU data from real sub or use override from simulator
@@ -450,31 +608,31 @@ class CombinedVisualizer:
             and "euler_deg" in imu_data["orientation"]
         ):
 
-            pygame.draw.line(self.screen, (100, 100, 100), (10, 160), (200, 160), 1)
+            pygame.draw.line(self.screen, (100, 100, 100), (10, 195), (200, 195), 1) # Changed from 160
             roll_text = f"Roll:  {imu_data['orientation']['euler_deg']['roll']:6.1f}°"
-            self.screen.blit(self.font.render(roll_text, 1, (255, 255, 255)), (10, 170))
+            self.screen.blit(self.font.render(roll_text, 1, (255, 255, 255)), (10, 205)) # Changed from 170
 
             pitch_text = f"Pitch: {imu_data['orientation']['euler_deg']['pitch']:6.1f}°"
             self.screen.blit(
-                self.font.render(pitch_text, 1, (255, 255, 255)), (10, 190)
+                self.font.render(pitch_text, 1, (255, 255, 255)), (10, 225) # Changed from 190
             )
 
             yaw_text = f"Yaw:   {imu_data['orientation']['euler_deg']['yaw']:6.1f}°"
-            self.screen.blit(self.font.render(yaw_text, 1, (255, 255, 255)), (10, 210))
+            self.screen.blit(self.font.render(yaw_text, 1, (255, 255, 255)), (10, 245)) # Changed from 210
 
         # Add depth display section:
         if imu_data and "depth" in imu_data and imu_data["depth"]:
             depth_data = imu_data["depth"]
             depth_text = f"Depth: {depth_data['depth']['relative_cm']:6.1f}cm"
-            self.screen.blit(self.font.render(depth_text, 1, (0, 255, 255)), (10, 230))
+            self.screen.blit(self.font.render(depth_text, 1, (0, 255, 255)), (10, 265)) # Changed from 230
 
             pressure_text = f"Press: {depth_data['pressure']['value']:6.1f}{depth_data['pressure']['units']}"
             self.screen.blit(
-                self.font.render(pressure_text, 1, (255, 255, 0)), (10, 250)
+                self.font.render(pressure_text, 1, (255, 255, 0)), (10, 285) # Changed from 250
             )
 
             temp_text = f"Temp:  {depth_data['temperature']['value']:6.1f}°C"
-            self.screen.blit(self.font.render(temp_text, 1, (255, 255, 0)), (10, 270))
+            self.screen.blit(self.font.render(temp_text, 1, (255, 255, 0)), (10, 305)) # Changed from 270
 
         # Update 3D visualization
         if (
@@ -510,6 +668,12 @@ class CombinedVisualizer:
         else:
             self.pyramid_collection.set_verts([])
             self.ax_3d.set_title("3D Orientation (Waiting...)")
+
+        # Update comparison data
+        real_data = self.data_receiver.latest_imu_data
+        self.update_comparison_data(real_data, imu_override)
+        self.update_comparison_plot()
+
 
         # ADD: Live tuning input boxes (insert after existing HUD elements)
         # Draw input boxes
@@ -594,7 +758,19 @@ class CombinedVisualizer:
             self.fig.canvas.buffer_rgba(), self.fig.canvas.get_width_height(), "RGBA"
         )
         self.screen.blit(plot_surface, (self.camera_width, 0))
+
+        # Render comparison plot
+        self.comparison_fig.canvas.draw()
+        comparison_surface = pygame.image.frombuffer(
+            self.comparison_fig.canvas.buffer_rgba(), 
+            self.comparison_fig.canvas.get_width_height(), "RGBA"
+        )
+        self.screen.blit(comparison_surface, (self.camera_width + self.plot_width, 0))
+
+        self._draw_plot_checkboxes()
+
         pygame.display.flip()
+
 
 
 class UDPClientProtocol(asyncio.DatagramProtocol):
@@ -1167,6 +1343,8 @@ class BlueROVController:
                             joystick_heave,
                             joystick_yaw,
                         )
+                        self.external_controller_active = False  # Permanent TakeOver for safety
+                        self.stabilization_enabled = False
 
                 else:
                     # Normal joystick control
