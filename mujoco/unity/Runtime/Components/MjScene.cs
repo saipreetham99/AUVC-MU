@@ -52,8 +52,7 @@ namespace Mujoco {
     public unsafe MujocoLib.mjData_* Data = null;
     public float previousValue = 0;
     // Thread-safe storage for control forces
-    private volatile bool hasControlForces = false;
-    private volatile bool needToWaitForSendingOnSuccess = true;
+    private bool hasControlForces = false; // Does not need to be volatile, since lock holds it down well
     private readonly object serverSimulationLock = new object();
     private readonly Queue<int> pendingSteps = new Queue<int>();
     private readonly Queue<float[]> pendingControlForces = new Queue<float[]>();
@@ -77,6 +76,8 @@ namespace Mujoco {
 
     private static byte[] modelInfoBuffer = new byte[6 * sizeof(float)];
     public int numSteps = 0;
+
+    public volatile int isSync = 1;
 
     public enum MsgHeader {
       ERROR = 0,
@@ -192,7 +193,8 @@ namespace Mujoco {
             $"[idx:0][send: {(int)MsgHeader.APPLY_CTRL}.0f],\n"+ // Help String
              " [idx:1]<numSteps> (Simulate n steps after "+
                                   "applying control),\n"+
-             " [idx:2-7]f1,f2,f3,f4,f5,f6],\n"+
+             " [idx:2]<sync/Async> default=1(Sync/Async)\n"+
+             " [idx:3-8]f1,f2,f3,f4,f5,f6],\n"+
              " recv: status_byte + sensor data\n",
             32,                                                 // Expected Revc Bytes
             21,                                                 // Expected Send Bytes: 1 status byte + 5 floats sensor data
@@ -203,6 +205,7 @@ namespace Mujoco {
             "STEP_SIM",                                           // Name
             $"[idx:0][send: {(int)MsgHeader.STEP_SIM}.0f],\n"+    // Help String
              " [idx:1]<numSteps>default=1 (Simulate n steps),\n"+
+             " [idx:2]<sync/async>default=1 (Sync/Async),\n"+
              " recv: status_byte + sensor data\n",
             8,                                                    // Expected Revc Bytes
             21,                                                   // Expected Send Bytes: 1 status byte + 5 floats sensor data
@@ -341,6 +344,9 @@ namespace Mujoco {
     }
 
     protected unsafe void Start() {
+      Application.targetFrameRate = 50;  // Force 50 FPS
+      Time.fixedDeltaTime = 0.02f;       // Ensure 50Hz physics
+
       SceneRecreationAtLateUpdateRequested = false;
       CreateScene();
       StartCoroutine(DeferredArrowInit());
@@ -358,14 +364,36 @@ namespace Mujoco {
 
     protected unsafe void FixedUpdate() {
       lock (serverSimulationLock) {
-        Model->opt.viscosity = 0.00009f*float.Parse(viscosityTextField.text);
-        Model->opt.timestep = float.Parse(timestepTextField.text);
+        float newViscosity;
+        if (float.TryParse(viscosityTextField.text, out newViscosity)) {
+          Model->opt.viscosity = 0.00009f * newViscosity;
+        }
+        float newTimestep;
+        if (float.TryParse(timestepTextField.text, out newTimestep)) {
+          Model->opt.timestep = newTimestep;
+        }
+
+        if(isSync == 1.0){
+          // TODO: Change color of visual element
+        }
 
         while (pendingSteps.Count > 0) {
           numSteps += pendingSteps.Dequeue();
         }
 
-        int stepsToExecute = numSteps;
+        // FIXED: Execute only a limited number of steps per frame
+        // const int MAX_STEPS_PER_FRAME = 1;  // Process 1 step per FixedUpdate (50Hz)
+        // int stepsToExecute = Math.Min(numSteps, MAX_STEPS_PER_FRAME);
+
+        // int stepsToExecute = numSteps;
+        
+        // Unity's Time.fixedDeltaTime should equal Model->opt.timestep for real-time
+        float physicsTimestep = (float)Model->opt.timestep;
+        // Process multiple steps per frame if Unity runs faster than physics needs
+        int targetStepsPerFrame = Mathf.Max(1, Mathf.RoundToInt(physicsTimestep / Time.fixedDeltaTime));
+        targetStepsPerFrame = 5; // HOT FIX!
+        int stepsToExecute = Math.Min(numSteps, targetStepsPerFrame);
+
         if (stepsToExecute > 0) {
           timer.Track(0);
           for (int i = 0; i < stepsToExecute; i++) {
@@ -381,6 +409,7 @@ namespace Mujoco {
         distanceTextField.text = ((float)Data->qpos[0]).ToString("F4");
 
         if (numSteps == 0) {
+          Debug.Log("SIMULATION: All steps complete, pulsing sync waiters");
           Monitor.PulseAll(serverSimulationLock);
         }
       }
@@ -737,7 +766,7 @@ namespace Mujoco {
         }
     }
 
-    private void ServerLoop(SocketData socketData) {
+    private void Server2Loop(SocketData socketData) {
         try {
             socketData.socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             socketData.socket.Bind(new IPEndPoint(IPAddress.Parse(serverIpAddress), socketData.port));
@@ -770,6 +799,48 @@ namespace Mujoco {
         }
     }
 
+    private void ServerLoop(SocketData socketData) {
+      try {
+        socketData.socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        socketData.socket.Bind(new IPEndPoint(IPAddress.Parse(serverIpAddress), socketData.port));
+        Debug.Log($"{socketData.name} UDP server listening for datagrams.");
+
+        // This buffer is now only a temporary holding place for each read.
+        byte[] receiveBuffer = new byte[1024]; 
+        EndPoint remoteEndPoint = new IPEndPoint(IPAddress.Any, 0);
+
+        while (socketData.isRunning) {
+          try {
+            if (socketData.socket.Available == 0) {
+              Thread.Sleep(1);
+              continue;
+            }
+            int bytesRead = socketData.socket.ReceiveFrom(receiveBuffer, ref remoteEndPoint);
+
+            if (bytesRead > 0) {
+              // * FIX: Create a copy of the received data for this specific request.
+              // This ensures that each thread in the ThreadPool gets its own isolated
+              // data and prevents the receiveBuffer from being overwritten by the next packet.
+              byte[] requestDataCopy = new byte[bytesRead];
+              Buffer.BlockCopy(receiveBuffer, 0, requestDataCopy, 0, bytesRead);
+
+              ThreadPool.QueueUserWorkItem(state => {
+                  // The state now contains the isolated copy of the data.
+                  var tuple = (Tuple<byte[], int, EndPoint>)state;
+                  ProcessUdpRequest(tuple.Item1, tuple.Item2, tuple.Item3, socketData.socket);
+                  }, Tuple.Create(requestDataCopy, bytesRead, remoteEndPoint));
+            }
+          } catch (SocketException se) {
+            if (socketData.isRunning) Debug.LogWarning($"{socketData.name} socket error: {se.SocketErrorCode}");
+          }
+        }
+      } catch (Exception e) {
+        if (socketData.isRunning) Debug.LogError($"{socketData.name} server loop error: {e.Message}");
+      } finally {
+        socketData.socket?.Close();
+      }
+    }
+
     private unsafe void ProcessUdpRequest(byte[] requestData, int length, EndPoint remoteEndPoint, Socket serverSocket) {
         try {
             if (length < 4) return;
@@ -791,52 +862,142 @@ namespace Mujoco {
         }
     }
 
-    private unsafe void ProcessCommandOptimized(int command, float[] floatsReceived, EndPoint remoteEndPoint, Socket serverSocket) {
+    private unsafe void Process2CommandOptimized(int command, float[] floatsReceived, EndPoint remoteEndPoint, Socket serverSocket) {
+        byte[] responsePayload = null;
         switch ((MsgHeader)command) {
             case MsgHeader.HEARTBEAT:
+                Debug.Log("HEARTBEAT received!");
                 // UDP is connectionless, heartbeat is less critical but can be a keep-alive
                 serverSocket.SendTo(new byte[] { 0 }, remoteEndPoint);
                 break;
 
             case MsgHeader.GET_MODEL_INFO:
+                Debug.Log("GET_MODEL_INFO received!");
                 float[] model_info = new float[6] {
-                    (float)Data->time, (float)Model->nq, (float)Model->nv,
+                    0, (float)Model->nq, (float)Model->nv,
                     (float)Model->na, (float)Model->nu, (float)Model->nbody
                 };
-                byte[] modelInfoBytes = new byte[24];
-                Buffer.BlockCopy(model_info, 0, modelInfoBytes, 0, 24);
-                serverSocket.SendTo(modelInfoBytes, remoteEndPoint);
+                lock (serverSimulationLock) {
+                  model_info[0] = (float)Data->time; // This needs lock for Data.time
+                }
+                responsePayload = new byte[24];
+                Buffer.BlockCopy(model_info, 0, responsePayload, 0, responsePayload.Length);
+                serverSocket.SendTo(responsePayload, remoteEndPoint);
                 break;
 
             case MsgHeader.GET_SENSORDATA:
-                 byte[] sensorResponse = GetSensorDataPayload();
-                 serverSocket.SendTo(sensorResponse, remoteEndPoint);
+                Debug.Log("GET_SENSORDATA received!");
+                int len = (int)Model->nsensordata + 1;
+                float[] sensorData = new float[len];
+                lock(serverSimulationLock){ // These need the lock since it needs to measure time
+                  double* sourcePtr = Data->sensordata;
+                  for (int i = 0; i < len - 1; i++) {
+                    sensorData[i] = (float)sourcePtr[i];
+                  }
+                  sensorData[len - 1] = (float)Data->time;
+                }
+                responsePayload = new byte[len * sizeof(float)];
+                Buffer.BlockCopy(sensorData, 0, responsePayload, 0, responsePayload.Length);
+                // Now responsePayload is valid and can be sent.
+                serverSocket.SendTo(responsePayload, remoteEndPoint);
                 break;
 
             case MsgHeader.APPLY_CTRL:
+                lock (serverSimulationLock) {
+                  // Format: [nsteps, sync/async, <6 thrusters>]
+                  if (floatsReceived.Length < 9) {
+                    Debug.Log("Error: APPLY_CTRL expects 8 float values (nsteps, sync_flag, 6x thrusters).");
+                    break;
+                  }
+
+                  int nstepsToSim = (int)floatsReceived[0];
+                  isSync = (int)floatsReceived[1];
+                  if (isSync != 0 && isSync !=1) { 
+                    Debug.Log($"Error in Sync/Async!: Invalid number received floatsReceived[1]={(float)isSync}. Expected 0.0 or 1.0.");
+                    isSync = 1; // Default behaviour : Sync
+                  }
+
+                  // Forces
+                  float[] forces = new float[6];
+                  Array.Copy(floatsReceived, 2, forces, 0, 6);
+                  hasControlForces = true;
+                  pendingControlForces.Enqueue(forces);
+                  pendingSteps.Enqueue(nstepsToSim);
+                  Debug.Log($"APPLY_CTRL received: nsteps={nstepsToSim}, sync_flag={isSync}");
+
+                  if(isSync == 1){
+                    while (numSteps > 0 || pendingSteps.Count > 0) {
+                      Monitor.Wait(serverSimulationLock);
+                    }
+                  }
+                  responsePayload = GetSensorDataPayloadWithStatus();
+                }
+                serverSocket.SendTo(responsePayload, remoteEndPoint);
+                break;
             case MsgHeader.STEP_SIM:
+                lock (serverSimulationLock) {
+                  // Format: [nsteps, sync_flag]
+                  if (floatsReceived.Length < 2) {
+                    Debug.Log("Error: STEP_SIM expects 2 float values (nsteps, sync_flag).");
+                    break; 
+                  }
+
+                  int nsteps = (int)floatsReceived[0];
+                  isSync = (int)floatsReceived[1];
+
+                  // Enqueue the simulation steps.
+                  pendingSteps.Enqueue(nsteps);
+
+                  Debug.Log($"STEP_SIM received: nsteps={nsteps}, sync_flag={isSync}");
+
+                  // If the call is synchronous, wait until the simulation completes these steps.
+                  if (isSync == 1) {
+                    // The simulation loop is responsible for pulsing this lock after steps are done.
+                    while (numSteps > 0 || pendingSteps.Count > 0) {
+                      Monitor.Wait(serverSimulationLock);
+                    }
+                  }
+                  // If async (isSync == 0), we don't wait and will send the response immediately.
+                  responsePayload = GetSensorDataPayloadWithStatus(); // This data is gathered before releasing the lock since we need data immediately
+                }
+                // Send current sensor data back to the client.
+                // For SYNC, this is the data AFTER the simulation step.
+                // For ASYNC, this is the data at the time of the request.
+                serverSocket.SendTo(responsePayload, remoteEndPoint);
+                break;
+
             case MsgHeader.RESET:
                 lock (serverSimulationLock) {
-                    if ((MsgHeader)command == MsgHeader.RESET) {
-                        ZeroOutAppliedForces();
-                        pendingControlForces.Clear();
-                        Array.Clear(_currentControlForces, 0, _currentControlForces.Length);
-                        hasControlForces = false;
-                        MujocoLib.mj_resetData(Model, Data);
-                        ApplyQposQvelToSim(floatsReceived);
-                    } else if ((MsgHeader)command == MsgHeader.APPLY_CTRL) {
-                        float[] forces = new float[6];
-                        Array.Copy(floatsReceived, 2, forces, 0, 6);
-                        hasControlForces = true;
-                        pendingControlForces.Enqueue(forces);
+                    // Format(15 floats): [nsteps, sync/async, Pos(3 floats):(x,y,z), Orn(4 floats:)(w,x,y,z), LinVel(3 floats: Vx,Vy,Vz), AngVel(3 floats: Ax,Ay,Az)]
+                  if (floatsReceived.Length < 16) {
+                    Debug.Log("Error: STEP_SIM expects 15 float values [nsteps, sync/async, Pos(3 floats):(x,y,z), Orn(4 floats:)(w,x,y,z), LinVel(3 floats: Vx,Vy,Vz), AngVel(3 floats: Ax,Ay,Az].");
+                    break; 
+                  }
+                    ZeroOutAppliedForces();
+                    pendingControlForces.Clear();
+                    Array.Clear(_currentControlForces, 0, _currentControlForces.Length);
+                    hasControlForces = false;
+                    MujocoLib.mj_resetData(Model, Data);
+                    ApplyQposQvelToSim(floatsReceived);
+                    MujocoLib.mj_kinematics(Model, Data);
+
+                    int nsteps = (int)floatsReceived[0];
+                    pendingSteps.Enqueue(nsteps);
+
+                    isSync = (int)floatsReceived[1];
+                    if (isSync != 0 && isSync !=1) { 
+                      Debug.Log($"Error in Sync/Async!: Invalid number received floatsReceived[1]={(float)isSync}. Expected 0.0 or 1.0.");
+                      isSync = 1; // Default behaviour : Sync
                     }
-                    pendingSteps.Enqueue((int)floatsReceived[1]);
-                    
-                    while (numSteps > 0 || pendingSteps.Count > 0) {
+                    Debug.Log($"RESET received: nsteps={nsteps}, sync_flag={isSync}");
+
+                    if (isSync == 1) {
+                      while (numSteps > 0 || pendingSteps.Count > 0) {
                         Monitor.Wait(serverSimulationLock);
+                      }
                     }
+                    responsePayload = GetSensorDataPayloadWithStatus();
                 }
-                byte[] responsePayload = GetSensorDataPayloadWithStatus();
                 serverSocket.SendTo(responsePayload, remoteEndPoint);
                 break;
 
@@ -853,17 +1014,175 @@ namespace Mujoco {
         }
     }
 
-    private unsafe byte[] GetSensorDataPayload() {
-        int len = (int)Model->nsensordata + 1;
-        float[] sensorData = new float[len];
-        byte[] sensorDataBytes = new byte[len * sizeof(float)];
-        double* sourcePtr = Data->sensordata;
-        for (int i = 0; i < len - 1; i++) {
-            sensorData[i] = (float)sourcePtr[i];
-        }
-        sensorData[len - 1] = (float)Data->time;
-        Buffer.BlockCopy(sensorData, 0, sensorDataBytes, 0, sensorDataBytes.Length);
-        return sensorDataBytes;
+    private unsafe void ProcessCommandOptimized(int command, float[] floatsReceived, EndPoint remoteEndPoint, Socket serverSocket) {
+      byte[] responsePayload = null;
+
+      switch ((MsgHeader)command) {
+        case MsgHeader.HEARTBEAT:
+          Debug.Log("HEARTBEAT received!");
+          serverSocket.SendTo(new byte[] { 0 }, remoteEndPoint);
+          break;
+
+        case MsgHeader.GET_MODEL_INFO:
+          Debug.Log("GET_MODEL_INFO received!");
+          float[] model_info = new float[6] {
+            0, (float)Model->nq, (float)Model->nv,
+            (float)Model->na, (float)Model->nu, (float)Model->nbody
+          };
+          lock (serverSimulationLock) {
+            model_info[0] = (float)Data->time;
+          }
+          responsePayload = new byte[24];
+          Buffer.BlockCopy(model_info, 0, responsePayload, 0, 24);
+          serverSocket.SendTo(responsePayload, remoteEndPoint);
+          break;
+
+        case MsgHeader.GET_SENSORDATA:
+          Debug.Log("GET_SENSORDATA received!");
+          int len = (int)Model->nsensordata + 1;
+          float[] sensorData = new float[len];
+          lock(serverSimulationLock){ // These need the lock since it needs to measure time
+            double* sourcePtr = Data->sensordata;
+            for (int i = 0; i < len - 1; i++) {
+              sensorData[i] = (float)sourcePtr[i];
+            }
+            sensorData[len - 1] = (float)Data->time;
+          }
+          responsePayload = new byte[len * sizeof(float)];
+          Buffer.BlockCopy(sensorData, 0, responsePayload, 0, responsePayload.Length);
+          // Now responsePayload is valid and can be sent.
+          serverSocket.SendTo(responsePayload, remoteEndPoint);
+          break;
+
+        case MsgHeader.APPLY_CTRL:
+          lock (serverSimulationLock) {
+            // The client sends 8 floats total (header + 7 args)
+            if (floatsReceived.Length < 8) {
+              Debug.Log("Error: APPLY_CTRL expects 8 float values (header, nsteps, sync_flag, 6x thrusters).");
+              break;
+            }
+
+            // FIX: Indices are shifted by 1 because the header is at index 0.
+            int nstepsToSim = (int)floatsReceived[1];
+            isSync = (int)floatsReceived[2];
+
+            if (isSync != 0 && isSync != 1) { 
+              Debug.Log($"Error in Sync/Async!: Invalid number received floatsReceived[2]={(float)isSync}. Expected 0.0 or 1.0.");
+              isSync = 1; // Default behaviour : Sync
+            }
+
+            float[] forces = new float[6];
+            // FIX: Force data starts at index 3.
+            Array.Copy(floatsReceived, 3, forces, 0, 6);
+            hasControlForces = true;
+            pendingControlForces.Enqueue(forces);
+            pendingSteps.Enqueue(nstepsToSim);
+            Debug.Log($"APPLY_CTRL received: nsteps={nstepsToSim}, sync_flag={isSync}");
+
+            if(isSync == 1){
+              while (numSteps > 0 || pendingSteps.Count > 0) {
+                Monitor.Wait(serverSimulationLock);
+              }
+            }
+            responsePayload = GetSensorDataPayloadWithStatus();
+          }
+          if (responsePayload != null) serverSocket.SendTo(responsePayload, remoteEndPoint);
+          break;
+
+        case MsgHeader.STEP_SIM:
+          lock (serverSimulationLock) {
+            // Client sends 3 floats (header, nsteps, sync_flag)
+            if (floatsReceived.Length < 3) {
+              Debug.Log("Error: STEP_SIM expects 3 float values (header, nsteps, sync_flag).");
+              break; 
+            }
+
+            // FIX: Indices are shifted by 1.
+            int nsteps = (int)floatsReceived[1];
+            isSync = (int)floatsReceived[2];
+
+            pendingSteps.Enqueue(nsteps);
+            Debug.Log($"STEP_SIM received: nsteps={nsteps}, sync_flag={isSync}");
+
+            if (isSync == 1) {
+              while (numSteps > 0 || pendingSteps.Count > 0) {
+                Monitor.Wait(serverSimulationLock);
+              }
+            }
+            responsePayload = GetSensorDataPayloadWithStatus();
+          }
+          if (responsePayload != null) serverSocket.SendTo(responsePayload, remoteEndPoint);
+          break;
+
+        case MsgHeader.RESET:
+          lock (serverSimulationLock) {
+            // Client sends 15 floats (header + 14 args)
+            if (floatsReceived.Length < 15) {
+              Debug.Log("Error: RESET expects 15 float values.");
+              break; 
+            }
+            ZeroOutAppliedForces();
+            pendingControlForces.Clear();
+            Array.Clear(_currentControlForces, 0, _currentControlForces.Length);
+            hasControlForces = false;
+            MujocoLib.mj_resetData(Model, Data);
+
+            // FIX: Pass the correctly indexed array to the helper function.
+            ApplyQposQvelToSim(floatsReceived);
+            MujocoLib.mj_kinematics(Model, Data);
+
+            // FIX: Indices are shifted by 1.
+            int nsteps = (int)floatsReceived[1];
+            isSync = (int)floatsReceived[2];
+
+            pendingSteps.Enqueue(nsteps);
+            if (isSync != 0 && isSync !=1) { 
+              Debug.Log($"Error in Sync/Async!: Invalid number received floatsReceived[2]={(float)isSync}. Expected 0.0 or 1.0.");
+              isSync = 1;
+            }
+            Debug.Log($"RESET received: nsteps={nsteps}, sync_flag={isSync}");
+
+            if (isSync == 1) {
+              while (numSteps > 0 || pendingSteps.Count > 0) {
+                Monitor.Wait(serverSimulationLock);
+              }
+            }
+            responsePayload = GetSensorDataPayloadWithStatus();
+          }
+          if (responsePayload != null) serverSocket.SendTo(responsePayload, remoteEndPoint);
+          break;
+
+        case MsgHeader.GET_RGB_IMAGE:
+        case MsgHeader.GET_MASKED_IMAGE:
+          serverSocket.SendTo(errorResponse, remoteEndPoint);
+          break;
+
+        default:
+          string helpMessage = GenerateHelpMessage();
+          byte[] helpBytes = Encoding.UTF8.GetBytes(helpMessage);
+          serverSocket.SendTo(helpBytes, remoteEndPoint);
+          break;
+      }
+    }
+
+    private unsafe bool ApplyQposQvelToSim(float[] floatsReceived){
+      // FIX: The data we care about now starts at index 3 (after header, nsteps, sync_flag).
+      int offset = 3; 
+      Data->qpos[0] = (double)floatsReceived[offset + 0];
+      Data->qpos[1] = (double)floatsReceived[offset + 1];
+      Data->qpos[2] = (double)floatsReceived[offset + 2];
+      Data->qpos[3] = (double)floatsReceived[offset + 3];
+      Data->qpos[4] = (double)floatsReceived[offset + 4];
+      Data->qpos[5] = (double)floatsReceived[offset + 5];
+      Data->qpos[6] = (double)floatsReceived[offset + 6];
+
+      Data->qvel[0] = (double)floatsReceived[offset + 7];
+      Data->qvel[1] = (double)floatsReceived[offset + 8];
+      Data->qvel[2] = (double)floatsReceived[offset + 9];
+      Data->qvel[3] = (double)floatsReceived[offset + 10];
+      Data->qvel[4] = (double)floatsReceived[offset + 11];
+      Data->qvel[5] = (double)floatsReceived[offset + 12];
+      return true;
     }
     
     private unsafe byte[] GetSensorDataPayloadWithStatus() {
@@ -881,25 +1200,6 @@ namespace Mujoco {
         
         Buffer.BlockCopy(sensorData, 0, responsePayload, 1, len * sizeof(float));
         return responsePayload;
-    }
-
-
-    private unsafe bool ApplyQposQvelToSim(float[] floatsReceived){
-      int offset = 2;
-      Data->qpos[0] = (double)floatsReceived[offset + 0];
-      Data->qpos[1] = (double)floatsReceived[offset + 1];
-      Data->qpos[2] = (double)floatsReceived[offset + 2];
-      Data->qpos[3] = (double)floatsReceived[offset + 3];
-      Data->qpos[4] = (double)floatsReceived[offset + 4];
-      Data->qpos[5] = (double)floatsReceived[offset + 5];
-      Data->qpos[6] = (double)floatsReceived[offset + 6];
-      Data->qvel[0] = (double)floatsReceived[offset + 7];
-      Data->qvel[1] = (double)floatsReceived[offset + 8];
-      Data->qvel[2] = (double)floatsReceived[offset + 9];
-      Data->qvel[3] = (double)floatsReceived[offset + 10];
-      Data->qvel[4] = (double)floatsReceived[offset + 11];
-      Data->qvel[5] = (double)floatsReceived[offset + 12];
-      return true;
     }
 
     private unsafe void ZeroOutAppliedForces(){
