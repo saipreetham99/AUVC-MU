@@ -57,7 +57,7 @@ class ThrusterController:
                 import busio
                 
                 i2c = busio.I2C(board.SCL, board.SDA)
-                self.pca = PCA9685(i2c)
+                self.pca = PCA9685()
 
             self.pca.set_pwm_frequency(50)
             self.set_neutral()
@@ -94,6 +94,10 @@ class ThrusterController:
             self.pca.pwm[self.THRUSTER_CHANNELS[i]] = pulse
         
         self.pca.pwm[self.LIGHT_CHANNEL] = light_pulse
+
+        logger.info(
+            f"ApplyingForces:{thruster_pulses}, Light: {light_pulse}"
+        )
         time.sleep(duration)
         
     def safe_shutdown(self):

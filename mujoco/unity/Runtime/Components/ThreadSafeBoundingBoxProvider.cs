@@ -34,64 +34,54 @@ public class ThreadSafeBoundingBoxProvider : MonoBehaviour{
   private float[] _latestBboxData = new float[4] { 0f, 0f, 0f, 0f };
 
   // --- Private Calculation Fields ---
-  private Camera _mainCamera;
+  [SerializeField] private Camera _mainCamera;
   private Renderer[] _renderers;
 
   #region Unity Lifecycle Methods
 
-  void Awake()
-  {
-    if (_instance == null)
-    {
+  void Awake(){
+    if (_instance == null){
       _instance = this;
       DontDestroyOnLoad(this.gameObject);
     }
-    else if (_instance != this)
-    {
+    else if (_instance != this){
       // Enforce singleton pattern
       Destroy(gameObject);
     }
   }
 
-  void Start()
-  {
-    _mainCamera = Camera.main;
-    if (_mainCamera == null)
-    {
-      Debug.LogError("ThreadSafeBoundingBoxProvider: Main Camera not found!");
+  void Start(){
+    if (_mainCamera == null){
+      _mainCamera = Camera.main;
+    }
+    if (_mainCamera == null){
+      Debug.LogError("ThreadSafeBoundingBoxProvider: No camera assigned and Main Camera not found!");
     }
 
     // Initial setup of renderers
-    if (target != null)
-    {
+    if (target != null){
       SetupRenderersForTarget();
     }
   }
 
-  void OnDestroy()
-  {
-    if (_instance == this)
-    {
+  void OnDestroy(){
+    if (_instance == this){
       _instance = null;
     }
   }
 
-  void Update()
-  {
+  void Update(){
     // This entire method runs on the main thread.
-    if (target == null || _mainCamera == null)
-    {
+    if (target == null || _mainCamera == null){
       // If no target, ensure the stored data is zeroed out.
-      lock (_bboxDataLock)
-      {
+      lock (_bboxDataLock){
         System.Array.Clear(_latestBboxData, 0, 4);
       }
       return;
     }
 
     // If the renderers haven't been fetched yet (e.g., target was assigned after Start)
-    if (_renderers == null)
-    {
+    if (_renderers == null) {
       SetupRenderersForTarget();
     }
 
@@ -99,8 +89,7 @@ public class ThreadSafeBoundingBoxProvider : MonoBehaviour{
     Rect currentBbox = CalculateScreenSpaceBoundingBox();
 
     // Lock and update the shared data.
-    lock (_bboxDataLock)
-    {
+    lock (_bboxDataLock) {
       _latestBboxData[0] = currentBbox.x;
       _latestBboxData[1] = currentBbox.y;
       _latestBboxData[2] = currentBbox.width;
@@ -117,11 +106,9 @@ public class ThreadSafeBoundingBoxProvider : MonoBehaviour{
   /// Format: [x, y, width, height]
   /// </summary>
   /// <returns>A float array containing the bounding box data.</returns>
-  public float[] GetLatestBoundingBoxData()
-  {
+  public float[] GetLatestBoundingBoxData() {
     float[] bboxData = new float[4];
-    lock (_bboxDataLock)
-    {
+    lock (_bboxDataLock) {
       // Copy the data to a new array to avoid returning a reference to the internal array.
       System.Buffer.BlockCopy(_latestBboxData, 0, bboxData, 0, 4 * sizeof(float));
     }
@@ -136,11 +123,9 @@ public class ThreadSafeBoundingBoxProvider : MonoBehaviour{
   /// Finds and stores the renderers for the current target.
   /// MUST be called from the main thread.
   /// </summary>
-  private void SetupRenderersForTarget()
-  {
+  private void SetupRenderersForTarget() {
     _renderers = target.GetComponentsInChildren<Renderer>();
-    if (_renderers.Length == 0)
-    {
+    if (_renderers.Length == 0) {
       Debug.LogWarning($"No Renderers found on target GameObject '{target.name}' or its children. Bounding box will be invalid.");
     }
   }
@@ -150,17 +135,14 @@ public class ThreadSafeBoundingBoxProvider : MonoBehaviour{
   /// MUST be called from the main thread.
   /// </summary>
   /// <returns>A Rect representing the screen-space bounding box.</returns>
-  private Rect CalculateScreenSpaceBoundingBox()
-  {
-    if (_renderers == null || _renderers.Length == 0)
-    {
+  private Rect CalculateScreenSpaceBoundingBox() {
+    if (_renderers == null || _renderers.Length == 0) {
       return Rect.zero;
     }
 
     var screenPoints = new List<Vector3>();
 
-    foreach (var rend in _renderers)
-    {
+    foreach (var rend in _renderers) {
       if (rend == null || !rend.isVisible) continue;
 
       Bounds bounds = rend.bounds;
@@ -175,17 +157,14 @@ public class ThreadSafeBoundingBoxProvider : MonoBehaviour{
       corners[6] = _mainCamera.WorldToScreenPoint(new Vector3(bounds.max.x, bounds.max.y, bounds.min.z));
       corners[7] = _mainCamera.WorldToScreenPoint(bounds.max);
 
-      foreach (var corner in corners)
-      {
-        if (corner.z > 0) // Only consider points in front of the camera
-        {
+      foreach (var corner in corners) {
+        if (corner.z > 0) { // Only consider points in front of the camera
           screenPoints.Add(corner);
         }
       }
     }
 
-    if (screenPoints.Count == 0)
-    {
+    if (screenPoints.Count == 0) {
       return Rect.zero;
     }
 

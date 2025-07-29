@@ -46,7 +46,6 @@ namespace Mujoco {
     public TMP_InputField distanceTextField;
     // public ThreadSafeBoundingBoxProvider targetSubmarine;
 
-
     // Timing behaviour
     private MultiStopwatch timer = new MultiStopwatch();
 
@@ -239,6 +238,12 @@ namespace Mujoco {
 
     public static int NetHelpMessageLength =0;
 
+    private UdpClient videoStreamClient;
+    private IPEndPoint videoStreamEndPoint;
+    private string pythonClientIp = "127.0.0.1"; // Set your client IP here
+    private int videoStreamPort = 60000;
+    private Camera subCam; // Your camera reference
+    private uint frameId = 0;
 
     // Common Socket structure to avoid code duplication
     private class SocketData
@@ -358,17 +363,28 @@ namespace Mujoco {
       Application.targetFrameRate = 50;  // Force 50 FPS
       Time.fixedDeltaTime = 0.02f;       // Ensure 50Hz physics
 
+      subCam = GameObject.Find("subCam").GetComponent<Camera>();
+
       SceneRecreationAtLateUpdateRequested = false;
       CreateScene();
       StartCoroutine(DeferredArrowInit());
       ctrlCallback += OnControlCallback;
+      // Initialize data streaming
       if (enableSocketServer) {
         NetHelpMessageLength = CalculateHelpMessageLength(Commands);
         StartSocketServer(actionSocket);
       }
+      // Initialize image streaming
+      InitializeStreamClient();
+      StartCoroutine(StreamVideoCoroutine());
     }
 
     protected unsafe void OnDestroy() {
+      // Image Server Couroutine Stop
+      StopCoroutine(StreamVideoCoroutine());
+      videoStreamClient?.Close();
+      videoStreamClient = null;
+
       StopSocketServer(actionSocket);
       DestroyScene();
     }
@@ -588,6 +604,84 @@ namespace Mujoco {
         Data = null;
       }
     }
+
+    #region Python Client Video Streaming
+
+    private void InitializeStreamClient() {
+      try {
+        videoStreamClient = new UdpClient();
+        videoStreamEndPoint = new IPEndPoint(IPAddress.Parse(pythonClientIp), videoStreamPort);
+        Debug.Log($"Initialized video stream sender for {pythonClientIp}:{videoStreamPort}");
+      } catch (Exception e) {
+        Debug.LogError($"Failed to initialize streaming client: {e.Message}");
+      }
+    }
+
+    private IEnumerator StreamVideoCoroutine() {
+      var wait = new WaitForSeconds(1.0f / 30.0f); // Stream at ~30 FPS
+      while (true) {
+        yield return new WaitForEndOfFrame(); // Wait for camera rendering to be complete
+        if (subCam != null) {
+          SendVideoStream();
+        }
+        yield return wait;
+      }
+    }
+
+    private void SendVideoStream() {
+      if (videoStreamClient == null) return;
+      try {
+        // 1. Capture Image from Camera
+        RenderTexture rt = RenderTexture.GetTemporary(subCam.pixelWidth, subCam.pixelHeight, 24);
+        subCam.targetTexture = rt;
+        subCam.Render();
+
+        Texture2D screenShot = new Texture2D(rt.width, rt.height, TextureFormat.RGB24, false);
+        RenderTexture.active = rt;
+        screenShot.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
+        screenShot.Apply(); // Apply the pixel changes
+
+        subCam.targetTexture = null;
+        RenderTexture.active = null; 
+        RenderTexture.ReleaseTemporary(rt); // Use ReleaseTemporary for RenderTextures
+
+        byte[] jpegBytes = screenShot.EncodeToJPG(75);
+        Destroy(screenShot); // Now destroy the Texture2D
+
+        // 2. Chunk and send the image
+        frameId++;
+        int maxChunkSize = 8192;
+        ushort numChunks = (ushort)((jpegBytes.Length + maxChunkSize - 1) / maxChunkSize);
+
+        for (ushort i = 0; i < numChunks; i++) {
+          int offset = i * maxChunkSize;
+          int size = Math.Min(maxChunkSize, jpegBytes.Length - offset);
+
+          // Create header: FrameID, NumChunks, ChunkID (Big-Endian for Python struct)
+          byte[] header = new byte[6];
+          byte[] fidBytes = BitConverter.GetBytes(frameId);
+          byte[] csBytes = BitConverter.GetBytes(numChunks);
+          byte[] cidBytes = BitConverter.GetBytes(i);
+          if (BitConverter.IsLittleEndian) { // Ensure Big-Endian
+            Array.Reverse(fidBytes);
+            Array.Reverse(csBytes);
+            Array.Reverse(cidBytes);
+          }
+          Buffer.BlockCopy(fidBytes, 0, header, 0, 2);
+          Buffer.BlockCopy(csBytes, 0, header, 2, 2);
+          Buffer.BlockCopy(cidBytes, 0, header, 4, 2);
+
+          byte[] packet = new byte[size + 6];
+          Buffer.BlockCopy(header, 0, packet, 0, 6);
+          Buffer.BlockCopy(jpegBytes, offset, packet, 6, size);
+
+          videoStreamClient.Send(packet, packet.Length, videoStreamEndPoint);
+        }
+      } catch (Exception e) {
+        Debug.LogWarning($"Could not send video frame: {e.Message}");
+      }
+    }
+    #endregion
 
     private static double[] _Qorn = new double[4] {0, 0, 0, 0};
     private static double[] _orn = new double[3] {0, 0, 0};
