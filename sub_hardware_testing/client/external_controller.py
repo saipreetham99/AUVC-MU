@@ -45,7 +45,7 @@ class MyController:
         }
         self.pid_states = {k: PIDState() for k in self.pid_gains}
 
-        print("🤖 External Controller initialized")
+        print(" External Controller initialized")
         print("   - Target depth: 50cm")
         print("   - Will perform simple autonomous circle pattern")
 
@@ -112,11 +112,11 @@ class MyController:
                 obstacle_detected = self._detect_obstacles(image_frame)
                 if obstacle_detected:
                     surge = 0.0  # Stop if obstacle detected
-                    print("🚨 Obstacle detected - stopping forward motion")
+                    print(" Obstacle detected - stopping forward motion")
 
             # Debug output (every 50 iterations = ~1 second at 50Hz)
             if self.control_counter % 50 == 0:
-                print(f"🤖 External Controller:")
+                print(f" External Controller:")
                 print(
                     f"   Depth: {current_depth:.1f}cm (target: {self.target_depth:.1f}cm)"
                 )
@@ -126,7 +126,7 @@ class MyController:
                 )
 
         except Exception as e:
-            print(f"🚨 External Controller Error: {e}")
+            print(f" External Controller Error: {e}")
             # Return neutral commands on error
             surge, strafe, heave, yaw_cmd = 0.0, 0.0, 0.0, 0.0
 

@@ -420,7 +420,7 @@ namespace Mujoco {
         distanceTextField.text = ((float)Data->qpos[0]).ToString("F4");
 
         if (numSteps == 0) {
-          Debug.Log("SIMULATION: All steps complete, pulsing sync waiters");
+          // Debug.Log("SIMULATION: All steps complete, pulsing sync waiters");
           Monitor.PulseAll(serverSimulationLock);
         }
       }
