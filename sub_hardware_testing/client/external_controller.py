@@ -219,6 +219,32 @@ class MyController:
         except Exception:
             return False
 
+    def process_sim_camera_frame(self, frame: np.ndarray) -> np.ndarray:
+        if frame is None:
+            return frame
+
+        mirrored_frame = cv2.flip(frame, 1)
+        
+        # TODO: Add your YOLO detection logic here
+        # For now, just add a placeholder border
+        processed_frame = mirrored_frame.copy()
+        cv2.rectangle(processed_frame, (10, 10), (50, 50), (0, 0, 255), 2)
+        cv2.putText(processed_frame, "SIM", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        
+        return processed_frame
+
+# real camera bounding box
+def process_real_camera_frame(frame: np.ndarray) -> np.ndarray:
+    if frame is None:
+        return frame
+    
+    # TODO: Add your YOLO detection logic here
+    # For now, just add a placeholder border
+    processed_frame = frame.copy()
+    cv2.rectangle(processed_frame, (10, 10), (50, 50), (0, 255, 0), 2)
+    cv2.putText(processed_frame, "REAL", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+    
+    return processed_frame
 
 # Example usage and testing
 if __name__ == "__main__":
