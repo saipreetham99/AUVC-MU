@@ -18,9 +18,9 @@ import struct
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from collections import deque
 from typing import Optional, Tuple
 
 import cv2
@@ -58,8 +58,8 @@ class MsgHeader(Enum):
 
 
 # Expected bytes from server for a response containing sensor data
-SENSOR_DATA_RECV_BYTES = 20  # 5 floats * 4 bytes/float
-ACK_WITH_SENSOR_DATA_RECV_BYTES = 21  # 1 byte status + 20 bytes sensor data
+SENSOR_DATA_RECV_BYTES = 40  # 10 floats * 4 bytes/float (4 sensor + 1 time + 1 depth + 4 bbox)
+ACK_WITH_SENSOR_DATA_RECV_BYTES = 41  # 1 byte status + 40 bytes sensor+time+depth+bbox data
 
 
 class SubmarineDataReceiverThread(threading.Thread):
@@ -772,7 +772,6 @@ class CombinedVisualizer:
         pygame.display.flip()
 
 
-
 class UDPClientProtocol(asyncio.DatagramProtocol):
     def __init__(self, on_con_lost: asyncio.Future):
         self.transport = None
@@ -857,9 +856,20 @@ class AsyncAUV:
             return None
 
         try:
-            values = struct.unpack("<5f", payload)
-            return {"imu_quaternion": np.array(values[:4]), "time": values[4]}
+            values = struct.unpack("<10f", payload)
+            return {
+                "imu_quaternion": np.array(values[:4]),
+                "time": values[4],
+                "depth": values[5],  # ADD DEPTH VALUE
+                "bounding_box": {
+                    "x": values[6],      # Updated indices
+                    "y": values[7], 
+                    "width": values[8],
+                    "height": values[9]
+                }
+            }
         except struct.error:
+            print(f"Error unpacking sensor response: expected 40 bytes, got {len(payload)} bytes")
             return None
 
     async def get_sensor_data(self) -> Optional[dict]:
@@ -1096,6 +1106,56 @@ class BlueROVController:
         )
         return surge, strafe, heave, yaw_cmd
 
+    def get_external_controller_input(self) -> Tuple[float, float, float, float]:
+        """Get control input from external controller."""
+        if not self.external_controller:
+            return 0.0, 0.0, 0.0, 0.0
+        try:
+            # Get current sensor data
+            real_data = self.data_receiver_thread.latest_imu_data
+            
+            # Don't try to get sim data synchronously from within async context
+            # Instead, use the last known sim data from the main loop
+            sim_data = getattr(self, '_last_sim_data', None)
+            
+            image_frame = None
+            with self.data_receiver_thread.frame_lock:
+                if self.data_receiver_thread.latest_frame is not None:
+                    image_frame = self.data_receiver_thread.latest_frame.copy()
+            
+            # Extract depth measurement (prioritize real submarine depth over sim depth)
+            depth_measurement = None
+            if (
+                real_data
+                and "depth" in real_data
+                and real_data["depth"]
+                and "depth" in real_data["depth"]
+            ):
+                depth_measurement = real_data["depth"]["depth"]
+            elif sim_data and "depth" in sim_data:
+                depth_measurement = sim_data["depth"]
+            
+            # Extract bounding box data from simulator
+            bbox_data = None
+            if sim_data and "bounding_box" in sim_data:
+                bbox_data = sim_data["bounding_box"]
+            
+            surge, strafe, heave, yaw_cmd = self.external_controller.update_loop(
+                image_frame, real_data, depth_measurement, bbox_data
+            )
+            
+            # Apply scaling
+            surge *= self.translation_scale
+            strafe *= self.translation_scale
+            heave *= self.translation_scale
+            yaw_cmd *= self.rotation_scale
+            
+            return surge, strafe, heave, yaw_cmd
+            
+        except Exception as e:
+            print(f" External controller error: {e}")
+            return 0.0, 0.0, 0.0, 0.0
+
     def calculate_stabilization_forces(
         self, current_attitude: np.ndarray, system_type: str
     ) -> np.ndarray:
@@ -1154,20 +1214,28 @@ class BlueROVController:
         return np.clip(total_forces, self.minForce, self.maxForce)
 
     def get_external_controller_input(self) -> Tuple[float, float, float, float]:
-        """Get control input from external AI controller."""
+        """Get control input from external controller."""
         if not self.external_controller:
             return 0.0, 0.0, 0.0, 0.0
-
         try:
             # Get current sensor data
             real_data = self.data_receiver_thread.latest_imu_data
+            sim_data = None
+            try:
+                # Create a new event loop task to get sim data
+                loop = asyncio.get_event_loop()
+                sim_data = loop.run_until_complete(
+                    asyncio.wait_for(self.auv.get_sensor_data(), timeout=0.01)
+                )
+            except (asyncio.TimeoutError, Exception):
+                sim_data = None
+                
             image_frame = None
-
             with self.data_receiver_thread.frame_lock:
                 if self.data_receiver_thread.latest_frame is not None:
                     image_frame = self.data_receiver_thread.latest_frame.copy()
-
-            # Extract depth measurement
+            
+            # Extract depth measurement (prioritize real submarine depth over sim depth)
             depth_measurement = None
             if (
                 real_data
@@ -1176,20 +1244,26 @@ class BlueROVController:
                 and "depth" in real_data["depth"]
             ):
                 depth_measurement = real_data["depth"]["depth"]
-
-            # Call external controller
+            elif sim_data and "depth" in sim_data:
+                depth_measurement = sim_data["depth"]
+            
+            # Extract bounding box data from simulator
+            bbox_data = None
+            if sim_data and "bounding_box" in sim_data:
+                bbox_data = sim_data["bounding_box"]
+            
             surge, strafe, heave, yaw_cmd = self.external_controller.update_loop(
-                image_frame, real_data, depth_measurement
+                image_frame, real_data, depth_measurement, bbox_data
             )
-
+            
             # Apply scaling (external controller returns -1 to 1, scale to our system)
             surge *= self.translation_scale
             strafe *= self.translation_scale
             heave *= self.translation_scale
             yaw_cmd *= self.rotation_scale
-
+            
             return surge, strafe, heave, yaw_cmd
-
+            
         except Exception as e:
             print(f" External controller error: {e}")
             return 0.0, 0.0, 0.0, 0.0

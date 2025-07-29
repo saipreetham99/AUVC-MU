@@ -44,6 +44,8 @@ namespace Mujoco {
     public TMP_InputField realtimeTextField;
     public TMP_InputField simtimeTextField;
     public TMP_InputField distanceTextField;
+    // public ThreadSafeBoundingBoxProvider targetSubmarine;
+
 
     // Timing behaviour
     private MultiStopwatch timer = new MultiStopwatch();
@@ -153,22 +155,31 @@ namespace Mujoco {
             0.1f                                              // Expected Timeout
           ),
       new CommandInfo(
-            MsgHeader.GET_SENSORDATA,                         // ENUM HEADER CODE
-            "GET_SENSORDATA",                                 // Name
-            $"[send: {(int)MsgHeader.GET_SENSORDATA}.0f],\n"+ // Help String
-             " recv:[<sub1:imu.w>,"+
-             " <sub1:imu.x>,"+
-             " <sub1:imu.y>,"+
-             " <sub1:imu.z>],\n"+
-             // " recv: <sub2:imu.w>,"+
-             //       " <sub2:imu.x>,"+
-             //       " <sub2:imu.y>,"+
-             //       " <sub2:imu.z]\n"
-             " recv:[<d.time>],\n",
-             4,                                               // Expected Recv Bytes
-             20,                                              // Expected Send Bytes: 5 floats * 4 bytes/float
-             2.0f                                             // Expected Timeout
-          ),
+          MsgHeader.GET_SENSORDATA,
+          "GET_SENSORDATA",
+          $"[send: {(int)MsgHeader.GET_SENSORDATA}.0f],\n"+
+           " recv:[<imu.w>, <imu.x>, <imu.y>, <imu.z>, <time>, <depth>, <bbox.x>, <bbox.y>, <bbox.w>, <bbox.h>]\n",
+          4,                                               // Expected Recv Bytes
+          40,                                              // Expected Send Bytes: 10 floats * 4 bytes/float
+          2.0f
+      ),
+      // new CommandInfo(
+      //       MsgHeader.GET_SENSORDATA,                         // ENUM HEADER CODE
+      //       "GET_SENSORDATA",                                 // Name
+      //       $"[send: {(int)MsgHeader.GET_SENSORDATA}.0f],\n"+ // Help String
+      //        " recv:[<sub1:imu.w>,"+
+      //        " <sub1:imu.x>,"+
+      //        " <sub1:imu.y>,"+
+      //        " <sub1:imu.z>],\n"+
+      //        // " recv: <sub2:imu.w>,"+
+      //        //       " <sub2:imu.x>,"+
+      //        //       " <sub2:imu.y>,"+
+      //        //       " <sub2:imu.z]\n"
+      //        " recv:[<d.time>],\n",
+      //        4,                                               // Expected Recv Bytes
+      //        20,                                              // Expected Send Bytes: 5 floats * 4 bytes/float
+      //        2.0f                                             // Expected Timeout
+      //     ),
       new CommandInfo(
             MsgHeader.GET_RGB_IMAGE,                          // ENUM HEADER CODE
             "GET_RGB_IMAGE",                                  // Name
@@ -195,7 +206,7 @@ namespace Mujoco {
                                   "applying control),\n"+
              " [idx:2]<sync/Async> default=1(Sync/Async)\n"+
              " [idx:3-8]f1,f2,f3,f4,f5,f6],\n"+
-             " recv: status_byte + sensor data\n",
+             " recv: status_byte + sensor_data + time + depth + bbox\n",
             32,                                                 // Expected Revc Bytes
             21,                                                 // Expected Send Bytes: 1 status byte + 5 floats sensor data
             1.0f                                                // Expected Timeout
@@ -206,7 +217,7 @@ namespace Mujoco {
             $"[idx:0][send: {(int)MsgHeader.STEP_SIM}.0f],\n"+    // Help String
              " [idx:1]<numSteps>default=1 (Simulate n steps),\n"+
              " [idx:2]<sync/async>default=1 (Sync/Async),\n"+
-             " recv: status_byte + sensor data\n",
+             " recv: status_byte + sensor_data + time + depth + bbox\n",
             8,                                                    // Expected Revc Bytes
             21,                                                   // Expected Send Bytes: 1 status byte + 5 floats sensor data
             1.0f                                                  // Expected Timeout
@@ -219,7 +230,7 @@ namespace Mujoco {
              "[idx:2-8]<sub1: pose array [Px,Py,Pz,w,x,y,z]>,"+
              "[idx:9-11] <vel [LinVelx, LinVely, LinVelz]>]"+
              "[idx:12-14] <ang vel [AngVelx, AngVely, AngVelz]>]\n"+
-             " recv: status_byte + sensor data\n",
+             " recv: status_byte + sensor_data + time + depth + bbox\n",
             60,                                                         // Expected Revc Bytes
             21,                                                         // Expected Send Bytes: 1 status byte + 5 floats sensor data
             2.0f                                                        // Expected Timeout
@@ -862,158 +873,6 @@ namespace Mujoco {
         }
     }
 
-    private unsafe void Process2CommandOptimized(int command, float[] floatsReceived, EndPoint remoteEndPoint, Socket serverSocket) {
-        byte[] responsePayload = null;
-        switch ((MsgHeader)command) {
-            case MsgHeader.HEARTBEAT:
-                Debug.Log("HEARTBEAT received!");
-                // UDP is connectionless, heartbeat is less critical but can be a keep-alive
-                serverSocket.SendTo(new byte[] { 0 }, remoteEndPoint);
-                break;
-
-            case MsgHeader.GET_MODEL_INFO:
-                Debug.Log("GET_MODEL_INFO received!");
-                float[] model_info = new float[6] {
-                    0, (float)Model->nq, (float)Model->nv,
-                    (float)Model->na, (float)Model->nu, (float)Model->nbody
-                };
-                lock (serverSimulationLock) {
-                  model_info[0] = (float)Data->time; // This needs lock for Data.time
-                }
-                responsePayload = new byte[24];
-                Buffer.BlockCopy(model_info, 0, responsePayload, 0, responsePayload.Length);
-                serverSocket.SendTo(responsePayload, remoteEndPoint);
-                break;
-
-            case MsgHeader.GET_SENSORDATA:
-                Debug.Log("GET_SENSORDATA received!");
-                int len = (int)Model->nsensordata + 1;
-                float[] sensorData = new float[len];
-                lock(serverSimulationLock){ // These need the lock since it needs to measure time
-                  double* sourcePtr = Data->sensordata;
-                  for (int i = 0; i < len - 1; i++) {
-                    sensorData[i] = (float)sourcePtr[i];
-                  }
-                  sensorData[len - 1] = (float)Data->time;
-                }
-                responsePayload = new byte[len * sizeof(float)];
-                Buffer.BlockCopy(sensorData, 0, responsePayload, 0, responsePayload.Length);
-                // Now responsePayload is valid and can be sent.
-                serverSocket.SendTo(responsePayload, remoteEndPoint);
-                break;
-
-            case MsgHeader.APPLY_CTRL:
-                lock (serverSimulationLock) {
-                  // Format: [nsteps, sync/async, <6 thrusters>]
-                  if (floatsReceived.Length < 9) {
-                    Debug.Log("Error: APPLY_CTRL expects 8 float values (nsteps, sync_flag, 6x thrusters).");
-                    break;
-                  }
-
-                  int nstepsToSim = (int)floatsReceived[0];
-                  isSync = (int)floatsReceived[1];
-                  if (isSync != 0 && isSync !=1) { 
-                    Debug.Log($"Error in Sync/Async!: Invalid number received floatsReceived[1]={(float)isSync}. Expected 0.0 or 1.0.");
-                    isSync = 1; // Default behaviour : Sync
-                  }
-
-                  // Forces
-                  float[] forces = new float[6];
-                  Array.Copy(floatsReceived, 2, forces, 0, 6);
-                  hasControlForces = true;
-                  pendingControlForces.Enqueue(forces);
-                  pendingSteps.Enqueue(nstepsToSim);
-                  Debug.Log($"APPLY_CTRL received: nsteps={nstepsToSim}, sync_flag={isSync}");
-
-                  if(isSync == 1){
-                    while (numSteps > 0 || pendingSteps.Count > 0) {
-                      Monitor.Wait(serverSimulationLock);
-                    }
-                  }
-                  responsePayload = GetSensorDataPayloadWithStatus();
-                }
-                serverSocket.SendTo(responsePayload, remoteEndPoint);
-                break;
-            case MsgHeader.STEP_SIM:
-                lock (serverSimulationLock) {
-                  // Format: [nsteps, sync_flag]
-                  if (floatsReceived.Length < 2) {
-                    Debug.Log("Error: STEP_SIM expects 2 float values (nsteps, sync_flag).");
-                    break; 
-                  }
-
-                  int nsteps = (int)floatsReceived[0];
-                  isSync = (int)floatsReceived[1];
-
-                  // Enqueue the simulation steps.
-                  pendingSteps.Enqueue(nsteps);
-
-                  Debug.Log($"STEP_SIM received: nsteps={nsteps}, sync_flag={isSync}");
-
-                  // If the call is synchronous, wait until the simulation completes these steps.
-                  if (isSync == 1) {
-                    // The simulation loop is responsible for pulsing this lock after steps are done.
-                    while (numSteps > 0 || pendingSteps.Count > 0) {
-                      Monitor.Wait(serverSimulationLock);
-                    }
-                  }
-                  // If async (isSync == 0), we don't wait and will send the response immediately.
-                  responsePayload = GetSensorDataPayloadWithStatus(); // This data is gathered before releasing the lock since we need data immediately
-                }
-                // Send current sensor data back to the client.
-                // For SYNC, this is the data AFTER the simulation step.
-                // For ASYNC, this is the data at the time of the request.
-                serverSocket.SendTo(responsePayload, remoteEndPoint);
-                break;
-
-            case MsgHeader.RESET:
-                lock (serverSimulationLock) {
-                    // Format(15 floats): [nsteps, sync/async, Pos(3 floats):(x,y,z), Orn(4 floats:)(w,x,y,z), LinVel(3 floats: Vx,Vy,Vz), AngVel(3 floats: Ax,Ay,Az)]
-                  if (floatsReceived.Length < 16) {
-                    Debug.Log("Error: STEP_SIM expects 15 float values [nsteps, sync/async, Pos(3 floats):(x,y,z), Orn(4 floats:)(w,x,y,z), LinVel(3 floats: Vx,Vy,Vz), AngVel(3 floats: Ax,Ay,Az].");
-                    break; 
-                  }
-                    ZeroOutAppliedForces();
-                    pendingControlForces.Clear();
-                    Array.Clear(_currentControlForces, 0, _currentControlForces.Length);
-                    hasControlForces = false;
-                    MujocoLib.mj_resetData(Model, Data);
-                    ApplyQposQvelToSim(floatsReceived);
-                    MujocoLib.mj_kinematics(Model, Data);
-
-                    int nsteps = (int)floatsReceived[0];
-                    pendingSteps.Enqueue(nsteps);
-
-                    isSync = (int)floatsReceived[1];
-                    if (isSync != 0 && isSync !=1) { 
-                      Debug.Log($"Error in Sync/Async!: Invalid number received floatsReceived[1]={(float)isSync}. Expected 0.0 or 1.0.");
-                      isSync = 1; // Default behaviour : Sync
-                    }
-                    Debug.Log($"RESET received: nsteps={nsteps}, sync_flag={isSync}");
-
-                    if (isSync == 1) {
-                      while (numSteps > 0 || pendingSteps.Count > 0) {
-                        Monitor.Wait(serverSimulationLock);
-                      }
-                    }
-                    responsePayload = GetSensorDataPayloadWithStatus();
-                }
-                serverSocket.SendTo(responsePayload, remoteEndPoint);
-                break;
-
-            case MsgHeader.GET_RGB_IMAGE:
-            case MsgHeader.GET_MASKED_IMAGE:
-                serverSocket.SendTo(errorResponse, remoteEndPoint);
-                break;
-
-            default:
-                string helpMessage = GenerateHelpMessage();
-                byte[] helpBytes = Encoding.UTF8.GetBytes(helpMessage);
-                serverSocket.SendTo(helpBytes, remoteEndPoint);
-                break;
-        }
-    }
-
     private unsafe void ProcessCommandOptimized(int command, float[] floatsReceived, EndPoint remoteEndPoint, Socket serverSocket) {
       byte[] responsePayload = null;
 
@@ -1039,24 +898,35 @@ namespace Mujoco {
 
         case MsgHeader.GET_SENSORDATA:
           Debug.Log("GET_SENSORDATA received!");
-          int len = (int)Model->nsensordata + 1;
+          // Format: [current_orientaiton quaternion, current_time, depth, 4xfloats(for bounding box)]
+          int nsensors = (int)Model->nsensordata;
+          int len = nsensors + 1 + 1 + 4;
           float[] sensorData = new float[len];
           lock(serverSimulationLock){ // These need the lock since it needs to measure time
             double* sourcePtr = Data->sensordata;
-            for (int i = 0; i < len - 1; i++) {
+            for (int i = 0; i < len - 5; i++) {
               sensorData[i] = (float)sourcePtr[i];
             }
-            sensorData[len - 1] = (float)Data->time;
+            sensorData[nsensors] = (float)Data->time;
+            sensorData[nsensors + 1] = (float)Data->qpos[2];
+
+            // Target Submarine BBox
+            // Format: { bbox.x, bbox.y, bbox.width, bbox.height };
+            float[] bboxData = ThreadSafeBoundingBoxProvider.Instance.GetLatestBoundingBoxData();
+            sensorData[nsensors + 2] = bboxData[0]; // x
+            sensorData[nsensors + 3] = bboxData[1]; // y
+            sensorData[nsensors + 4] = bboxData[2]; // width
+            sensorData[nsensors + 5] = bboxData[3]; // height
           }
           responsePayload = new byte[len * sizeof(float)];
           Buffer.BlockCopy(sensorData, 0, responsePayload, 0, responsePayload.Length);
-          // Now responsePayload is valid and can be sent.
           serverSocket.SendTo(responsePayload, remoteEndPoint);
           break;
 
         case MsgHeader.APPLY_CTRL:
           lock (serverSimulationLock) {
             // The client sends 8 floats total (header + 7 args)
+            // Server sends: [status_byte(x1), sensorData (x nsensorsdata), time(x1), bbox(x4) ]
             if (floatsReceived.Length < 8) {
               Debug.Log("Error: APPLY_CTRL expects 8 float values (header, nsteps, sync_flag, 6x thrusters).");
               break;
@@ -1077,6 +947,7 @@ namespace Mujoco {
             hasControlForces = true;
             pendingControlForces.Enqueue(forces);
             pendingSteps.Enqueue(nstepsToSim);
+
             Debug.Log($"APPLY_CTRL received: nsteps={nstepsToSim}, sync_flag={isSync}");
 
             if(isSync == 1){
@@ -1084,7 +955,10 @@ namespace Mujoco {
                 Monitor.Wait(serverSimulationLock);
               }
             }
-            responsePayload = GetSensorDataPayloadWithStatus();
+            // Target Submarine BBox
+            // Format: { bbox.x, bbox.y, bbox.width, bbox.height };
+            float[] bboxData = ThreadSafeBoundingBoxProvider.Instance.GetLatestBoundingBoxData();
+            responsePayload = CreateSensorAndBboxPayload(bboxData);
           }
           if (responsePayload != null) serverSocket.SendTo(responsePayload, remoteEndPoint);
           break;
@@ -1109,16 +983,18 @@ namespace Mujoco {
                 Monitor.Wait(serverSimulationLock);
               }
             }
-            responsePayload = GetSensorDataPayloadWithStatus();
+            // responsePayload = GetSensorDataPayloadWithStatus();
+            float[] bboxData = ThreadSafeBoundingBoxProvider.Instance.GetLatestBoundingBoxData();
+            responsePayload = CreateSensorAndBboxPayload(bboxData);
           }
           if (responsePayload != null) serverSocket.SendTo(responsePayload, remoteEndPoint);
           break;
 
         case MsgHeader.RESET:
           lock (serverSimulationLock) {
-            // Client sends 15 floats (header + 14 args)
-            if (floatsReceived.Length < 15) {
-              Debug.Log("Error: RESET expects 15 float values.");
+            // Client sends 16 floats (header , nsteps , isSync , Px,Py,Pz, Ow,Ox,Oy,Oz, LVx, LVy, Lvz, AVx, AVy, AVz )
+            if (floatsReceived.Length < 16) {
+              Debug.Log("Error: RESET expects 16 float values.");
               break; 
             }
             ZeroOutAppliedForces();
@@ -1147,7 +1023,9 @@ namespace Mujoco {
                 Monitor.Wait(serverSimulationLock);
               }
             }
-            responsePayload = GetSensorDataPayloadWithStatus();
+            // responsePayload = GetSensorDataPayloadWithStatus();
+            float[] bboxData = ThreadSafeBoundingBoxProvider.Instance.GetLatestBoundingBoxData();
+            responsePayload = CreateSensorAndBboxPayload(bboxData);
           }
           if (responsePayload != null) serverSocket.SendTo(responsePayload, remoteEndPoint);
           break;
@@ -1184,7 +1062,38 @@ namespace Mujoco {
       Data->qvel[5] = (double)floatsReceived[offset + 12];
       return true;
     }
-    
+
+    private unsafe byte[] CreateSensorAndBboxPayload(float[] bboxData){
+      // --- 1. Calculate the total size needed ---
+      int sensorFloatCount = (int)Model->nsensordata + 1; // +1 for time
+      int depthFloatCount = 1;
+      int bboxFloatCount = 4;
+      int totalPayloadSize = 1 + (sensorFloatCount * sizeof(float)) + (depthFloatCount * sizeof(float)) + (bboxFloatCount * sizeof(float));
+
+      byte[] responsePayload = new byte[totalPayloadSize];
+      responsePayload[0] = 0x00; // Success byte
+
+      // Copy sensor data and time
+      float[] tempSensorFloats = new float[sensorFloatCount];
+      double* sourcePtr = Data->sensordata;
+      for (int i = 0; i < sensorFloatCount - 1; i++) {
+        tempSensorFloats[i] = (float)sourcePtr[i];
+      }
+      tempSensorFloats[sensorFloatCount - 1] = (float)Data->time;
+      Buffer.BlockCopy(tempSensorFloats, 0, responsePayload, 1, sensorFloatCount * sizeof(float));
+
+      // --- ADD MISSING DEPTH VALUE ---
+      int depthOffset = 1 + (sensorFloatCount * sizeof(float));
+      float depthValue = (float)Data->qpos[2]; // Depth of submarine
+      Buffer.BlockCopy(BitConverter.GetBytes(depthValue), 0, responsePayload, depthOffset, sizeof(float));
+
+      // Copy bounding box data
+      int bboxOffset = depthOffset + (depthFloatCount * sizeof(float));
+      Buffer.BlockCopy(bboxData, 0, responsePayload, bboxOffset, bboxFloatCount * sizeof(float));
+
+      return responsePayload;
+    }
+
     private unsafe byte[] GetSensorDataPayloadWithStatus() {
         int len = (int)Model->nsensordata + 1;
         float[] sensorData = new float[len];

@@ -54,6 +54,7 @@ class MyController:
         image_frame: Optional[np.ndarray],
         imu_data: Optional[Dict],
         depth_measurement: Optional[Dict],
+        bounding_box=None
     ) -> Tuple[float, float, float, float]:
         """
         Main control loop for external controller.
@@ -66,6 +67,9 @@ class MyController:
         Returns:
             Tuple of (surge, strafe, heave, yaw_cmd) in range [-1.0, 1.0]
         """
+        if bounding_box:
+            x, y, w, h = bounding_box["x"], bounding_box["y"], bounding_box["width"], bounding_box["height"]
+
 
         # Default to neutral
         surge, strafe, heave, yaw_cmd = 0.0, 0.0, 0.0, 0.0
