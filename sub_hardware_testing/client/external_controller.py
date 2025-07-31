@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-External Controller for Submarine
-This is an example implementation that can be customized for AI/autonomous control.
+External Controller for Submarine with YOLO-based object detection and chase strategy.
+Processes both camera feeds simultaneously but uses commands from selected camera only.
 """
 
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
+from enum import Enum, auto
 
 import cv2
 import numpy as np
+import torch
+from ultralytics import YOLO
 
 
 @dataclass
@@ -25,241 +28,277 @@ class PIDState:
     integral: float = 0.0
 
 
+@dataclass
+class BoundingBox:
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 0.0
+    height: float = 0.0
+    
+    @property
+    def center(self) -> Tuple[float, float]:
+        return self.x + self.width/2, self.y + self.height/2
+    
+    @property
+    def area(self) -> float:
+        return self.width * self.height
+    
+    @property
+    def is_valid(self) -> bool:
+        return self.width > 0 and self.height > 0
+
+
+@dataclass
+class CameraProcessingResult:
+    """A data class to hold all results from processing a single camera frame."""
+    surge: float
+    strafe: float
+    heave: float
+    yaw_cmd: float
+    processed_image: Optional[np.ndarray]
+    bbox: BoundingBox
+    flash_lights: bool
+
+
+class ChaseStrategyState(Enum):
+    IDLE = auto()
+    SEARCHING = auto()
+    ADVANCING = auto()
+    ORBITING = auto()
+    CELEBRATING = auto()
+
+
+class ChaseAndCircleStrategy:
+    """
+    Implements a robust "Orbit and Re-advance" strategy. It includes a grace
+    period for transient bounding box losses to prevent state oscillation.
+    """
+    def __init__(self, camera_width: int, camera_height: int):
+        self.state = ChaseStrategyState.IDLE
+        self.camera_center_x = camera_width / 2
+        self.camera_center_y = camera_height / 2
+        print(f"Chase strategy initialized for {camera_width}x{camera_height} camera.")
+        
+        # --- Control Gains ---
+        self.centering_kp = 0.0003
+        self.advance_surge = 0.8
+        self.orbit_strafe_command = 0.8
+        self.max_yaw_error_for_strafe = 80.0
+
+        # --- State Thresholds ---
+        self.orbit_entry_thresh_area = camera_width * camera_height * 0.05
+        self.orbit_exit_thresh_area = self.orbit_entry_thresh_area * 0.75
+        
+        # --- Timers and Robustness ---
+        self.orbit_duration_for_win_s = 10.0
+        self.celebration_time_s = 5.0
+        self.state_timer = 0.0
+        
+        self.lost_target_grace_period_s = 0.5
+        self.lost_target_timer = 0.0
+
+    def update(self, bbox: BoundingBox, dt: float) -> Tuple[float, float, float, float, bool]:
+        surge, strafe, heave, yaw = 0.0, 0.0, 0.0, 0.0
+        flash_lights = False
+
+        if bbox.is_valid:
+            self.lost_target_timer = 0.0
+        else:
+            self.lost_target_timer += dt
+
+        if self.lost_target_timer > self.lost_target_grace_period_s:
+            if self.state != ChaseStrategyState.SEARCHING:
+                self.state = ChaseStrategyState.SEARCHING
+            return 0.0, 0.0, 0.0, 0.0, False
+
+        if self.state in [ChaseStrategyState.IDLE, ChaseStrategyState.SEARCHING]:
+            if bbox.is_valid:
+                print(f"[{id(self)}] Target acquired. Advancing.")
+                self.state = ChaseStrategyState.ADVANCING
+        
+        elif self.state == ChaseStrategyState.ADVANCING:
+            surge = self.advance_surge
+            strafe = 0.0
+            
+            if bbox.is_valid:
+                err_x = self.camera_center_x - bbox.center[0]
+                err_y = self.camera_center_y - bbox.center[1]
+                yaw = self.centering_kp * err_x
+                heave = self.centering_kp * err_y
+
+                if bbox.area > self.orbit_entry_thresh_area:
+                    print(f"[{id(self)}] Target at optimal range. Entering ORBITING.")
+                    self.state = ChaseStrategyState.ORBITING
+                    self.state_timer = 0.0
+        
+        elif self.state == ChaseStrategyState.ORBITING:
+            surge = 0.0
+            
+            if bbox.is_valid:
+                err_x = self.camera_center_x - bbox.center[0]
+                err_y = self.camera_center_y - bbox.center[1]
+                yaw = self.centering_kp * err_x
+                heave = -self.centering_kp * err_y
+                strafe_scale = max(0.0, 1.0 - (abs(err_x) / self.max_yaw_error_for_strafe))
+                strafe = self.orbit_strafe_command * strafe_scale
+
+                if bbox.area < self.orbit_exit_thresh_area:
+                    print(f"[{id(self)}] Target moved away. Re-ADVANCING.")
+                    self.state = ChaseStrategyState.ADVANCING
+            else:
+                strafe = self.orbit_strafe_command
+            
+            self.state_timer += dt
+            if self.state_timer > self.orbit_duration_for_win_s:
+                print(f"[{id(self)}] Successfully orbited target. CELEBRATING.")
+                self.state = ChaseStrategyState.CELEBRATING
+                self.state_timer = 0.0
+
+        elif self.state == ChaseStrategyState.CELEBRATING:
+            self.state_timer += dt
+            flash_lights = (int(self.state_timer * 4) % 2) == 0
+            if self.state_timer > self.celebration_time_s:
+                print(f"[{id(self)}] Celebration over. Returning to SEARCHING.")
+                self.state = ChaseStrategyState.SEARCHING
+
+        return surge, strafe, heave, yaw, flash_lights
+
+
 class MyController:
     """
-    Example external controller for submarine autonomous operation.
-    Replace this implementation with your own AI/control logic.
+    External controller for submarine autonomous operation with dual YOLO model support.
+    Always processes both cameras simultaneously and draws bounding boxes on both.
     """
 
-    def __init__(self):
-        """Initialize the external controller."""
+    def __init__(self, sim_weights_path: str = "./unity.pt", real_weights_path: str = "./best.pt"):
+        """Initialize the external controller with both YOLO models."""
         self.last_time = time.time()
         self.control_counter = 0
-        self.target_depth = -50.0  # Target 50cm deep
-        self.target_yaw = 0.0  # Target heading
+        
+        print(f"Loading SIM YOLO model from {sim_weights_path}...")
+        self.yolo_model_sim = YOLO(sim_weights_path)
+        
+        print(f"Loading REAL YOLO model from {real_weights_path}...")
+        self.yolo_model_real = YOLO(real_weights_path)
+        
+        # KEY CHANGE: Initialize separate chase strategies for each camera feed
+        print("Initializing separate chase strategies for REAL and SIM cameras.")
+        self.chase_strategy_real = ChaseAndCircleStrategy(camera_width=640, camera_height=480)
+        self.chase_strategy_sim = ChaseAndCircleStrategy(camera_width=640, camera_height=480)
 
-        # PID controllers for autonomous behavior
-        self.pid_gains = {
-            "depth": PIDGains(kp=0.02, ki=0.001, kd=0.01),
-            "yaw": PIDGains(kp=0.1, ki=0.01, kd=0.05),
-        }
-        self.pid_states = {k: PIDState() for k in self.pid_gains}
+        print("\nExternal Controller Initialized:")
+        print("  - Both REAL and SIM cameras will be processed with YOLO simultaneously.")
+        print("  - The GUI checkbox determines which camera's commands are used.")
 
-        print(" External Controller initialized")
-        print("   - Target depth: 50cm")
-        print("   - Will perform simple autonomous circle pattern")
+# In external_controller.py, inside class MyController
+
+    # In external_controller.py, inside class MyController
+
+# In external_controller.py, inside class MyController
+
+    def _process_single_camera(
+        self,
+        image_frame: Optional[np.ndarray],
+        camera_type: str,
+        chase_strategy: ChaseAndCircleStrategy,
+        dt: float
+    ) -> CameraProcessingResult:
+        """
+        Processes a single camera feed with corrected logic for flipping.
+        It performs all calculations on the original image and only flips the
+        final canvas for display purposes.
+        """
+        is_sim = (camera_type == "sim")
+        camera_label = "SIM" if is_sim else "REAL"
+        camera_color = (255, 255, 0) if is_sim else (100, 255, 100)
+        yolo_model = self.yolo_model_sim if is_sim else self.yolo_model_real
+        
+        bbox_to_use = BoundingBox()
+        has_frame = image_frame is not None
+
+        # --- 1. Prepare the Canvas (NO FLIPPING HERE) ---
+        if has_frame:
+            # If we have a frame, use a copy of it as the base canvas
+            canvas = image_frame.copy()
+        else:
+            # Otherwise, create a black placeholder canvas
+            canvas = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        # --- 2. Run YOLO detection on the ORIGINAL, UNFLIPPED canvas ---
+        if has_frame:
+            try:
+                results = yolo_model(canvas, verbose=False)
+                highest_conf = 0.0
+                best_box_coords = None
+                if results and results[0].boxes:
+                    for box in results[0].boxes:
+                        if box.conf and box.conf[0] > highest_conf:
+                            highest_conf = box.conf[0]
+                            best_box_coords = box.xywh[0]
+                if best_box_coords is not None:
+                    cx, cy, w, h = best_box_coords
+                    bbox_to_use = BoundingBox(x=(cx - w/2).item(), y=(cy - h/2).item(),
+                                              width=w.item(), height=h.item())
+            except Exception as e:
+                print(f"!!! YOLO Error on {camera_label} camera: {e}")
+                cv2.putText(canvas, "YOLO ERROR", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        
+        # --- 3. Get Control Commands from the Chase Strategy (using correct coordinates) ---
+        s_surge, s_strafe, s_heave, s_yaw, flash_lights = chase_strategy.update(bbox_to_use, dt)
+        
+        # --- 4. Draw All Overlays on the UNFLIPPED canvas ---
+        if not has_frame:
+            cv2.putText(canvas, f"NO {camera_label} FEED", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (128, 128, 128), 2)
+
+        if bbox_to_use.is_valid:
+            pt1 = (int(bbox_to_use.x), int(bbox_to_use.y))
+            pt2 = (int(bbox_to_use.x + bbox_to_use.width), int(bbox_to_use.y + bbox_to_use.height))
+            cv2.rectangle(canvas, pt1, pt2, (0, 255, 0), 2)
+
+        state_text = f"STATE: {chase_strategy.state.name}"
+        cv2.putText(canvas, state_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, camera_color, 2)
+        
+        # --- 5. Flip the FINAL canvas just for display, if it's the sim camera ---
+        final_processed_image = cv2.flip(canvas, 1) if is_sim else canvas
+        
+        return CameraProcessingResult(
+            surge=s_surge, strafe=s_strafe, heave=s_heave, yaw_cmd=s_yaw,
+            processed_image=final_processed_image, # Return the correctly oriented image for display
+            bbox=bbox_to_use, 
+            flash_lights=flash_lights
+        )
 
     def update_loop(
         self,
-        image_frame: Optional[np.ndarray],
-        imu_data: Optional[Dict],
-        depth_measurement: Optional[Dict],
-        bounding_box=None
-    ) -> Tuple[float, float, float, float]:
+        real_frame: Optional[np.ndarray],
+        sim_frame: Optional[np.ndarray],
+    ) -> Tuple[CameraProcessingResult, CameraProcessingResult]:
         """
-        Main control loop for external controller.
-
-        Args:
-            image_frame: Current camera frame (BGR format)
-            imu_data: Complete IMU data dict with orientation and depth
-            depth_measurement: Depth-specific data (extracted from imu_data["depth"])
+        Main processing loop. ALWAYS processes both camera frames.
+        This function is now decoupled from control selection.
 
         Returns:
-            Tuple of (surge, strafe, heave, yaw_cmd) in range [-1.0, 1.0]
+            A tuple containing the full processing results for the real and sim cameras.
         """
-        if bounding_box:
-            x, y, w, h = bounding_box["x"], bounding_box["y"], bounding_box["width"], bounding_box["height"]
-
-
-        # Default to neutral
-        surge, strafe, heave, yaw_cmd = 0.0, 0.0, 0.0, 0.0
-
         current_time = time.time()
         dt = current_time - self.last_time
+        if dt <= 0: dt = 1/50.0 # Avoid division by zero on first frame
         self.last_time = current_time
         self.control_counter += 1
 
-        try:
-            # Extract current state
-            current_depth = self._get_current_depth(depth_measurement)
-            current_yaw = self._get_current_yaw(imu_data)
+        # --- STEP 1: Always process both cameras ---
+        real_result = self._process_single_camera(real_frame, "real", self.chase_strategy_real, dt)
+        sim_result = self._process_single_camera(sim_frame, "sim", self.chase_strategy_sim, dt)
 
-            # Simple autonomous behavior: Circle pattern while maintaining depth
+        # --- STEP 2: Return the complete results for both ---
+        if self.control_counter % 100 == 0: # Print status periodically
+             print(f"VisionProc: REAL State={real_result.bbox.is_valid} | SIM State={sim_result.bbox.is_valid}")
 
-            # 1. Depth control (heave)
-            if current_depth is not None:
-                depth_error = self.target_depth - current_depth
-                heave = self._update_pid("depth", depth_error, dt)
-                heave = np.clip(heave, -0.5, 0.5)  # Limit vertical speed
+        return real_result, sim_result
 
-            # 2. Yaw control - slow circle pattern
-            if current_yaw is not None:
-                # Create a slowly changing target yaw for circle pattern
-                circle_rate = 10.0  # degrees per second
-                self.target_yaw += circle_rate * dt
-                self.target_yaw = self.target_yaw % 360.0
-
-                yaw_error = self._angle_difference(self.target_yaw, current_yaw)
-                yaw_cmd = self._update_pid("yaw", yaw_error, dt)
-                yaw_cmd = np.clip(yaw_cmd, -0.3, 0.3)  # Limit turn rate
-
-            # 3. Forward motion - gentle cruise
-            surge = 0.2  # Slow forward motion
-
-            # 4. Image processing (example)
-            if image_frame is not None:
-                # Example: Simple obstacle avoidance based on image
-                obstacle_detected = self._detect_obstacles(image_frame)
-                if obstacle_detected:
-                    surge = 0.0  # Stop if obstacle detected
-                    print(" Obstacle detected - stopping forward motion")
-
-            # Debug output (every 50 iterations = ~1 second at 50Hz)
-            if self.control_counter % 50 == 0:
-                print(f" External Controller:")
-                print(
-                    f"   Depth: {current_depth:.1f}cm (target: {self.target_depth:.1f}cm)"
-                )
-                print(f"   Yaw: {current_yaw:.1f}° (target: {self.target_yaw:.1f}°)")
-                print(
-                    f"   Commands: surge={surge:.2f}, heave={heave:.2f}, yaw={yaw_cmd:.2f}"
-                )
-
-        except Exception as e:
-            print(f" External Controller Error: {e}")
-            # Return neutral commands on error
-            surge, strafe, heave, yaw_cmd = 0.0, 0.0, 0.0, 0.0
-
-        return surge, strafe, heave, yaw_cmd
-
-    def _update_pid(self, pid_name: str, error: float, dt: float) -> float:
-        """Update PID controller with new error value."""
-        if dt <= 0:
-            return 0.0
-
-        gains = self.pid_gains[pid_name]
-        state = self.pid_states[pid_name]
-
-        # Integral term with windup protection
-        state.integral += error * dt
-        state.integral = np.clip(state.integral, -10.0, 10.0)
-
-        # Derivative term
-        derivative = (error - state.prev_error) / dt
-
-        # PID output
-        output = gains.kp * error + gains.ki * state.integral + gains.kd * derivative
-
-        state.prev_error = error
-        return output
-
-    def reset_pid(self, pid_name: str):
-        """Reset specific PID controller state."""
-        self.pid_states[pid_name] = PIDState()
-
-    def reset_all_pids(self):
-        """Reset all PID controller states."""
-        for key in self.pid_states:
-            self.pid_states[key] = PIDState()
-
-    def _get_current_depth(self, depth_data: Optional[Dict]) -> Optional[float]:
-        """Extract current depth in cm from depth measurement."""
-        try:
-            if depth_data and "relative_cm" in depth_data:
-                return depth_data["relative_cm"]
-            return None
-        except Exception:
-            return None
-
-    def _get_current_yaw(self, imu_data: Optional[Dict]) -> Optional[float]:
-        """Extract current yaw in degrees from IMU data."""
-        try:
-            if (
-                imu_data
-                and "orientation" in imu_data
-                and imu_data["orientation"]
-                and "euler_deg" in imu_data["orientation"]
-            ):
-                return imu_data["orientation"]["euler_deg"]["yaw"]
-            return None
-        except Exception:
-            return None
-
-    def _angle_difference(self, target: float, current: float) -> float:
-        """Calculate the shortest angular difference between two angles."""
-        diff = target - current
-        while diff > 180:
-            diff -= 360
-        while diff < -180:
-            diff += 360
-        return diff
-
-    def _detect_obstacles(self, image: np.ndarray) -> bool:
-        """
-        Simple obstacle detection using image processing.
-        Replace with your own computer vision logic.
-        """
-        try:
-            # Convert to grayscale
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-            # Simple edge detection
-            edges = cv2.Canny(gray, 100, 200)
-
-            # Count edge pixels in the center region
-            h, w = edges.shape
-            center_region = edges[h // 3 : 2 * h // 3, w // 3 : 2 * w // 3]
-            edge_pixels = np.sum(center_region > 0)
-
-            # Threshold for obstacle detection
-            obstacle_threshold = 1000  # Adjust based on your environment
-
-            return edge_pixels > obstacle_threshold
-
-        except Exception:
-            return False
-
-    def process_sim_camera_frame(self, frame: np.ndarray) -> np.ndarray:
-        if frame is None:
-            return frame
-
-        mirrored_frame = cv2.flip(frame, 1)
-        
-        # TODO: Add your YOLO detection logic here
-        # For now, just add a placeholder border
-        processed_frame = mirrored_frame.copy()
-        cv2.rectangle(processed_frame, (10, 10), (50, 50), (0, 0, 255), 2)
-        cv2.putText(processed_frame, "SIM", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-        
-        return processed_frame
-
-# real camera bounding box
+# Legacy function for compatibility if called directly elsewhere
 def process_real_camera_frame(frame: np.ndarray) -> np.ndarray:
-    if frame is None:
-        return frame
-    
-    # TODO: Add your YOLO detection logic here
-    # For now, just add a placeholder border
+    if frame is None: return frame
     processed_frame = frame.copy()
-    cv2.rectangle(processed_frame, (10, 10), (50, 50), (0, 255, 0), 2)
-    cv2.putText(processed_frame, "REAL", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-    
+    cv2.putText(processed_frame, "REAL (Legacy)", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
     return processed_frame
-
-# Example usage and testing
-if __name__ == "__main__":
-    controller = MyController()
-
-    # Test with dummy data
-    dummy_imu = {"orientation": {"euler_deg": {"yaw": 45.0, "pitch": 0.0, "roll": 0.0}}}
-
-    dummy_depth = {"relative_cm": -30.0}
-    dummy_image = np.zeros((480, 640, 3), dtype=np.uint8)
-
-    surge, strafe, heave, yaw_cmd = controller.update_loop(
-        dummy_image, dummy_imu, dummy_depth
-    )
-
-    print(
-        f"Test output: surge={surge:.2f}, strafe={strafe:.2f}, heave={heave:.2f}, yaw={yaw_cmd:.2f}"
-    )

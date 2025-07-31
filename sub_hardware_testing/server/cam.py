@@ -11,7 +11,7 @@ class CameraStreamer:
     Captures video frames, encodes them as JPEG, splits them into chunks,
     and streams them over UDP to a specified client.
     """
-    def __init__(self, client_ip, port, resolution=(640, 480), quality=70, fps=24):
+    def __init__(self, client_ip, port, resolution=(640, 480), quality=40, fps=24):
         """
         Initializes the camera streamer.
         
@@ -27,7 +27,7 @@ class CameraStreamer:
             self.port = port
             self.resolution = resolution
             self.quality = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
-            self.max_packet_size = 60000  # Max size of a UDP packet payload
+            self.max_packet_size = 32768  #16384 #Higher Performance
 
             self.running = False
             self._thread = None
@@ -114,7 +114,7 @@ class CameraStreamer:
                 self._frame_id = (self._frame_id + 1) % 65535 # Wrap around to avoid overflow
                 
                 # Small sleep to yield CPU, actual FPS is limited by camera
-                time.sleep(1/50) 
+                # time.sleep(1/50) 
 
             except Exception as e:
                 logging.error(f"Error in camera stream loop: {e}")

@@ -629,9 +629,16 @@ namespace Mujoco {
     }
 
     private void SendVideoStream() {
-      if (videoStreamClient == null) return;
+      // If the client is null, try to re-initialize it immediately.
+      // This allows the server to recover if the client disconnects and reconnects.
+      if (videoStreamClient == null) {
+        InitializeStreamClient();
+        // If it's still null after trying, exit to avoid errors.
+        if (videoStreamClient == null) return;
+      }
+
       try {
-        // 1. Capture Image from Camera
+        // --- This part is the same as before ---
         RenderTexture rt = RenderTexture.GetTemporary(subCam.pixelWidth, subCam.pixelHeight, 24);
         subCam.targetTexture = rt;
         subCam.Render();
@@ -639,16 +646,15 @@ namespace Mujoco {
         Texture2D screenShot = new Texture2D(rt.width, rt.height, TextureFormat.RGB24, false);
         RenderTexture.active = rt;
         screenShot.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
-        screenShot.Apply(); // Apply the pixel changes
+        screenShot.Apply();
 
         subCam.targetTexture = null;
         RenderTexture.active = null; 
-        RenderTexture.ReleaseTemporary(rt); // Use ReleaseTemporary for RenderTextures
+        RenderTexture.ReleaseTemporary(rt);
 
         byte[] jpegBytes = screenShot.EncodeToJPG(75);
-        Destroy(screenShot); // Now destroy the Texture2D
+        Destroy(screenShot);
 
-        // 2. Chunk and send the image
         frameId++;
         int maxChunkSize = 8192;
         ushort numChunks = (ushort)((jpegBytes.Length + maxChunkSize - 1) / maxChunkSize);
@@ -657,12 +663,11 @@ namespace Mujoco {
           int offset = i * maxChunkSize;
           int size = Math.Min(maxChunkSize, jpegBytes.Length - offset);
 
-          // Create header: FrameID, NumChunks, ChunkID (Big-Endian for Python struct)
           byte[] header = new byte[6];
           byte[] fidBytes = BitConverter.GetBytes(frameId);
           byte[] csBytes = BitConverter.GetBytes(numChunks);
           byte[] cidBytes = BitConverter.GetBytes(i);
-          if (BitConverter.IsLittleEndian) { // Ensure Big-Endian
+          if (BitConverter.IsLittleEndian) {
             Array.Reverse(fidBytes);
             Array.Reverse(csBytes);
             Array.Reverse(cidBytes);
@@ -677,8 +682,18 @@ namespace Mujoco {
 
           videoStreamClient.Send(packet, packet.Length, videoStreamEndPoint);
         }
-      } catch (Exception e) {
-        Debug.LogWarning($"Could not send video frame: {e.Message}");
+      } 
+      // --- This is the critical change ---
+      catch (SocketException se) {
+        // A SocketException (like 'Connection Refused') means the client is gone.
+        // We must destroy our current UdpClient to force a re-initialization.
+        Debug.LogError($"SocketException while sending video: {se.Message}. Resetting sender.");
+        videoStreamClient.Close();
+        videoStreamClient = null; // Setting to null will trigger re-initialization on the next frame.
+      }
+      catch (Exception e) {
+        // Catch any other unexpected errors during streaming.
+        Debug.LogWarning($"Could not send video frame due to general error: {e.Message}");
       }
     }
     #endregion
