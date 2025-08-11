@@ -62,15 +62,14 @@ class MsgHeader(Enum):
 SENSOR_DATA_RECV_BYTES = 40  # 10 floats * 4 bytes/float (4 sensor + 1 time + 1 depth + 4 bbox)
 ACK_WITH_SENSOR_DATA_RECV_BYTES = 41  # 1 byte status + 40 bytes sensor+time+depth+bbox data
 
-# In live_tuning_visualizer.py
 
 class SubmarineDataReceiverThread(threading.Thread):
     def __init__(self, video_port=10001, sim_video_port=60000, imu_port=10002):
         super().__init__(daemon=True, name="SubmarineDataReceiver")
         self.video_listen_addr = ("", video_port)
-        self.sim_video_listen_addr = ("", sim_video_port)
+        self.sim_video_listen_addr = ("", sim_video_port)  # Sim camera from Unity
         self.imu_listen_addr = ("", imu_port)
-        self.latest_sim_frame = None
+        self.latest_sim_frame = None  # Sim camera frame
         self.latest_frame = None
         self.latest_imu_data = None
         self.frame_lock = threading.Lock()
@@ -81,29 +80,13 @@ class SubmarineDataReceiverThread(threading.Thread):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.bind(self.sim_video_listen_addr)
         s.settimeout(1.0)
-        
         b = {}
-        packet_counter = 0
-        # Maximum number of incomplete frames to keep in memory
-        MAX_BUFFERED_FRAMES = 50 
-
-        print(f"[DEBUG] SIM VIDEO: Listening for UDP packets on {self.sim_video_listen_addr}...")
 
         while not self.stop_event.is_set():
             try:
                 d, _ = s.recvfrom(65536)
-                packet_counter += 1
-
-                if len(d) < 6: continue
-
-                # Periodically clean up old, incomplete frames to prevent memory leak
-                if packet_counter > 1000:
-                    packet_counter = 0
-                    if len(b) > MAX_BUFFERED_FRAMES:
-                        # Find the oldest frame IDs and remove them
-                        oldest_fids = sorted(b.keys())[:-MAX_BUFFERED_FRAMES]
-                        for fid_to_del in oldest_fids:
-                            del b[fid_to_del]
+                if len(d) < 6:
+                    continue
 
                 fid, cs, cid = struct.unpack("!HHH", d[:6])
                 if fid not in b:
@@ -119,34 +102,22 @@ class SubmarineDataReceiverThread(threading.Thread):
 
             except socket.timeout:
                 continue
-            except Exception as e:
-                print(f"[ERROR] Sim video loop exception: {e}")
+            except Exception:
+                pass
+
         s.close()
 
     def _video_loop(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.bind(self.video_listen_addr)
         s.settimeout(1.0)
-        
         b = {}
-        packet_counter = 0
-        # Maximum number of incomplete frames to keep in memory
-        MAX_BUFFERED_FRAMES = 50
 
         while not self.stop_event.is_set():
             try:
                 d, _ = s.recvfrom(65536)
-                packet_counter += 1
-
-                if len(d) < 6: continue
-
-                # Periodically clean up old, incomplete frames
-                if packet_counter > 1000:
-                    packet_counter = 0
-                    if len(b) > MAX_BUFFERED_FRAMES:
-                        oldest_fids = sorted(b.keys())[:-MAX_BUFFERED_FRAMES]
-                        for fid_to_del in oldest_fids:
-                            del b[fid_to_del]
+                if len(d) < 6:
+                    continue
 
                 fid, cs, cid = struct.unpack("!HHH", d[:6])
                 if fid not in b:
@@ -155,39 +126,45 @@ class SubmarineDataReceiverThread(threading.Thread):
                 b[fid][cid] = d[6:]
                 if len(b[fid]) == cs:
                     jpeg = b"".join(v for k, v in sorted(b[fid].items()))
-                    fr = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    fr = cv2.imdecode(
+                        np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR
+                    )
                     with self.frame_lock:
                         self.latest_frame = fr
                     del b[fid]
 
             except socket.timeout:
                 continue
-            except Exception as e:
-                print(f"[ERROR] Real video loop exception: {e}")
+            except Exception:
+                pass
+
         s.close()
 
     def _imu_loop(self):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.bind(self.imu_listen_addr)
         s.settimeout(1.0)
+
         while not self.stop_event.is_set():
             try:
                 d, _ = s.recvfrom(1024)
                 self.latest_imu_data = json.loads(d.decode("utf-8"))
-            except (socket.timeout, json.JSONDecodeError):
+            except socket.timeout:
                 continue
-            except Exception as e:
-                print(f"[ERROR] IMU loop exception: {e}")
+            except Exception:
                 self.latest_imu_data = None
+
         s.close()
 
     def run(self):
         vt = threading.Thread(target=self._video_loop, daemon=True)
         sim_vt = threading.Thread(target=self._sim_video_loop, daemon=True)
         it = threading.Thread(target=self._imu_loop, daemon=True)
+
         vt.start()
         sim_vt.start()
         it.start()
+
         vt.join()
         sim_vt.join()
         it.join()
@@ -367,100 +344,56 @@ class CombinedVisualizer:
         self._draw_plot_checkboxes()
         pygame.display.flip()
 
-    def _draw_camera_panel(self):
-        pygame.draw.rect(self.screen, (0,0,0), self.camera_area)
-        
-        frame_to_display = None
-        
-        # This logic is now fed by get_external_controller_input, which correctly
-        # populates these variables with the processed frames from MyController.
-        if self.show_sim_camera:
-            # If the SIM camera checkbox is ticked, try to show the processed SIM frame.
-            if hasattr(self, 'last_processed_sim'):
-                frame_to_display = self.last_processed_sim
-        else:
-            # Otherwise, try to show the processed REAL frame.
-            if hasattr(self, 'last_processed_real'):
-                frame_to_display = self.last_processed_real
-        
-        # Display the selected frame
-        if frame_to_display is not None and frame_to_display.shape[0] > 0 and frame_to_display.shape[1] > 0:
-            try:
-                # Ensure the frame is in a displayable format (RGB)
-                if len(frame_to_display.shape) == 3:
-                    frame_rgb = cv2.cvtColor(frame_to_display, cv2.COLOR_BGR2RGB)
-                    frame_resized = cv2.resize(frame_rgb, self.camera_area.size)
-                    camera_surface = pygame.surfarray.make_surface(np.rot90(frame_resized))
-                    self.screen.blit(camera_surface, self.camera_area.topleft)
-                else:
-                    # Handle grayscale or other unexpected formats if necessary
-                    raise ValueError("Frame is not in BGR format")
-            except Exception as e:
-                # Catch any conversion or drawing errors
-                source_text = "SIM CAMERA" if self.show_sim_camera else "REAL CAMERA"
-                error_text = self.font.render(f"ERROR DISPLAYING {source_text}", 1, (255, 0, 0))
-                self.screen.blit(error_text, error_text.get_rect(center=self.camera_area.center))
-                print(f"Error drawing camera panel: {e}")
-
-        else:
-            # If frame_to_display is None, show a waiting message
-            source_text = "SIM CAMERA" if self.show_sim_camera else "REAL CAMERA"
-            waiting_text = self.font_large.render(f"WAITING FOR {source_text}", 1, (128, 128, 128))
-            self.screen.blit(waiting_text, waiting_text.get_rect(center=self.camera_area.center))
-        
-        # --- Draw the camera toggle checkbox and its label (no changes here) ---
-        pygame.draw.rect(self.screen, (200,200,200), self.camera_toggle_checkbox, 1)
-        if self.show_sim_camera:
-            pygame.draw.line(self.screen, "#32CD32", 
-                            (self.camera_toggle_checkbox.x+3, self.camera_toggle_checkbox.y+10), 
-                            (self.camera_toggle_checkbox.x+8, self.camera_toggle_checkbox.y+15), 3)
-            pygame.draw.line(self.screen, "#32CD32", 
-                            (self.camera_toggle_checkbox.x+8, self.camera_toggle_checkbox.y+15), 
-                            (self.camera_toggle_checkbox.x+15, self.camera_toggle_checkbox.y+5), 3)
-        
-        label_text = "USE SIM" if self.show_sim_camera else "USE REAL"
-        label_color = (255, 100, 100) if self.show_sim_camera else (100, 255, 100)
-        self.screen.blit(self.font.render(label_text, 1, label_color), 
-                        (self.camera_toggle_checkbox.right + 8, self.camera_toggle_checkbox.y))
-
     def draw_camera_panel(self):
         pygame.draw.rect(self.screen, (0,0,0), self.camera_area)
         
+        # Get both camera frames
+        real_frame = None
+        sim_frame = None
+        
+        with self.data_receiver.frame_lock:
+            if self.data_receiver.latest_frame is not None:
+                real_frame = self.data_receiver.latest_frame.copy()
+        
+        with self.data_receiver.sim_frame_lock:
+            if self.data_receiver.latest_sim_frame is not None:
+                sim_frame = self.data_receiver.latest_sim_frame.copy()
+        
+        # Process with external controller if available
         frame_to_display = None
         
-        if self.show_sim_camera:
-            if hasattr(self, 'last_processed_sim'):
+        if hasattr(self, '_external_controller_ref') and self._external_controller_ref:
+            # Use stored processed frames from external controller
+            if self.show_sim_camera:
                 frame_to_display = self.last_processed_sim
-        else:
-            if hasattr(self, 'last_processed_real'):
+            else:
                 frame_to_display = self.last_processed_real
+        else:
+            # No external controller - just use raw frames with basic overlay
+            if self.show_sim_camera and sim_frame is not None:
+                frame_to_display = cv2.flip(sim_frame, 1)  # Mirror sim camera
+                color, label = (255, 255, 0), "SIM"
+            elif not self.show_sim_camera and real_frame is not None:
+                frame_to_display = real_frame.copy()
+                color, label = (0, 255, 0), "REAL"
+            
+            # Add basic overlay if we have a frame
+            if frame_to_display is not None:
+                cv2.rectangle(frame_to_display, (10, 10), (50, 50), color, 2)
+                cv2.putText(frame_to_display, label, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         
-        if frame_to_display is not None and frame_to_display.shape[0] > 0 and frame_to_display.shape[1] > 0:
-            try:
-                if len(frame_to_display.shape) == 3:
-                    frame_rgb = cv2.cvtColor(frame_to_display, cv2.COLOR_BGR2RGB)
-                    frame_resized = cv2.resize(frame_rgb, self.camera_area.size)
-
-                    # --- THE FIX IS HERE ---
-                    # Replace np.rot90 with np.transpose to correctly swap the axes for Pygame
-                    # without visually rotating or distorting the image content.
-                    camera_surface = pygame.surfarray.make_surface(np.transpose(frame_resized, (1, 0, 2)))
-                    
-                    self.screen.blit(camera_surface, self.camera_area.topleft)
-                else:
-                    raise ValueError("Frame is not in BGR format")
-            except Exception as e:
-                source_text = "SIM CAMERA" if self.show_sim_camera else "REAL CAMERA"
-                error_text = self.font.render(f"ERROR DISPLAYING {source_text}", 1, (255, 0, 0))
-                self.screen.blit(error_text, error_text.get_rect(center=self.camera_area.center))
-                print(f"Error drawing camera panel: {e}")
-
+        # Display the frame
+        if frame_to_display is not None and len(frame_to_display.shape) == 3:
+            frame_rgb = cv2.cvtColor(frame_to_display, cv2.COLOR_BGR2RGB)
+            frame_resized = cv2.resize(frame_rgb, self.camera_area.size)
+            camera_surface = pygame.surfarray.make_surface(np.rot90(frame_resized))
+            self.screen.blit(camera_surface, self.camera_area.topleft)
         else:
             source_text = "SIM CAMERA" if self.show_sim_camera else "REAL CAMERA"
-            waiting_text = self.font_large.render(f"WAITING FOR {source_text}", 1, (128, 128, 128))
+            waiting_text = self.font_large.render(f"NO {source_text} FEED", 1, (128, 128, 128))
             self.screen.blit(waiting_text, waiting_text.get_rect(center=self.camera_area.center))
         
-        # --- (The rest of the function remains unchanged) ---
+        # Draw camera toggle checkbox
         pygame.draw.rect(self.screen, (200,200,200), self.camera_toggle_checkbox, 1)
         if self.show_sim_camera:
             pygame.draw.line(self.screen, "#32CD32", 
@@ -470,7 +403,8 @@ class CombinedVisualizer:
                             (self.camera_toggle_checkbox.x+8, self.camera_toggle_checkbox.y+15), 
                             (self.camera_toggle_checkbox.x+15, self.camera_toggle_checkbox.y+5), 3)
         
-        label_text = "USE SIM" if self.show_sim_camera else "USE REAL"
+        # Label for checkbox
+        label_text = "SIM CAM" if self.show_sim_camera else "REAL CAM"
         label_color = (255, 100, 100) if self.show_sim_camera else (100, 255, 100)
         self.screen.blit(self.font.render(label_text, 1, label_color), 
                         (self.camera_toggle_checkbox.right + 8, self.camera_toggle_checkbox.y))
@@ -856,7 +790,7 @@ class AsyncAUV:
         return self._parse_sensor_response(response)
 
     async def reset(self, num_steps: int = 0, sync_flag: int = 1) -> Optional[dict]:
-        pose = np.array([9.25, -5.71, 0, 1, 0, 0, 0])
+        pose = np.array([10.25, 6.71, 0, 1, 0, 0, 0])
         vel = np.zeros(3)
         ang_vel = np.zeros(3)
         # FIX: Correct format string to pack 16 floats
@@ -938,8 +872,8 @@ class BlueROVController:
         self.auv = AsyncAUV(auv_ip, auv_port)
         pygame.init()
         pygame.joystick.init()
-        # if pygame.joystick.get_count() == 0:
-        #     raise RuntimeError("No gamepad connected.")
+        if pygame.joystick.get_count() == 0:
+            raise RuntimeError("No gamepad connected.")
         self.controller = pygame.joystick.Joystick(0)
         self.controller.init()
         print(f"Gamepad: {self.controller.get_name()}")
@@ -1070,8 +1004,16 @@ class BlueROVController:
         try:
             # Get current sensor data
             real_data = self.data_receiver_thread.latest_imu_data
-            sim_data = None # This data is currently unused by the external controller but fetched
-            
+            sim_data = None
+            try:
+                # Create a new event loop task to get sim data
+                loop = asyncio.get_event_loop()
+                sim_data = loop.run_until_complete(
+                    asyncio.wait_for(self.auv.get_sensor_data(), timeout=0.01)
+                )
+            except (asyncio.TimeoutError, Exception):
+                sim_data = None
+                
             # Get both camera frames
             real_frame = None
             sim_frame = None
@@ -1084,33 +1026,30 @@ class BlueROVController:
                 if self.data_receiver_thread.latest_sim_frame is not None:
                     sim_frame = self.data_receiver_thread.latest_sim_frame.copy()
             
-            # Extract depth measurement (currently unused, but available)
+            # Extract depth measurement (prioritize real submarine depth over sim depth)
             depth_measurement = None
-            if (real_data and "depth" in real_data and real_data["depth"] 
-                and "depth" in real_data["depth"]):
+            if (
+                real_data
+                and "depth" in real_data
+                and real_data["depth"]
+                and "depth" in real_data["depth"]
+            ):
                 depth_measurement = real_data["depth"]["depth"]
+            elif sim_data and "depth" in sim_data:
+                depth_measurement = sim_data["depth"]
             
-            # Extract bounding box data from simulator (currently unused)
+            # Extract bounding box data from simulator
             bbox_data = None
+            if sim_data and "bounding_box" in sim_data:
+                bbox_data = sim_data["bounding_box"]
             
-            # KEY CHANGE: Determine which camera is selected in the UI
-            # The checkbox now determines which camera's commands will be used.
+            # Use external controller with both frames (use checkbox to determine selected camera)
             selected_camera = "sim" if self.visualizer.show_sim_camera else "real"
-            
-            # KEY CHANGE: Call the updated external controller loop.
-            # It processes both frames but returns commands from the selected camera.
-            # It now returns SIX values.
             surge, strafe, heave, yaw_cmd, processed_real, processed_sim = self.external_controller.update_loop(
-                real_frame, 
-                sim_frame, 
-                real_data, 
-                depth_measurement, 
-                bbox_data, 
-                selected_camera
+                real_frame, sim_frame, real_data, depth_measurement, bbox_data, selected_camera
             )
             
-            # BUG FIX: Store the processed frames for the visualizer to display.
-            # This is the crucial link that was missing.
+            # Store processed frames for visualizer
             self.visualizer.last_processed_real = processed_real
             self.visualizer.last_processed_sim = processed_sim
             
@@ -1124,9 +1063,6 @@ class BlueROVController:
             
         except Exception as e:
             print(f" External controller error: {e}")
-            # Ensure visualizer frames are cleared on error to prevent stale images
-            self.visualizer.last_processed_real = None
-            self.visualizer.last_processed_sim = None
             return 0.0, 0.0, 0.0, 0.0
 
     def calculate_stabilization_forces( self, current_attitude: np.ndarray, system_type: str) -> np.ndarray:
@@ -1218,7 +1154,7 @@ class BlueROVController:
             None, self.real_sub_client.send_control, armed, light_on, forces
         )
 
-    async def _run_controller_async(self, num_steps, fwcmd, runtime):
+    async def run_controller_async(self, num_steps, fwcmd, runtime):
         print("🚀 Starting ASYNC controller loop. Press MENU to arm.")
         self.visualizer = CombinedVisualizer(self.data_receiver_thread)
         self.visualizer._external_controller_ref = self.external_controller
@@ -1465,144 +1401,6 @@ class BlueROVController:
                 print(
                     f"Final Perf - Loop: {np.mean(self.loop_times)*1000:.1f}ms, Net: {np.mean(self.network_times)*1000:.1f}ms"
                 )
-
-    async def run_controller_async(self, num_steps, fwcmd, runtime):
-        print("🚀 Starting ASYNC controller loop. Press MENU to arm.")
-        self.visualizer = CombinedVisualizer(self.data_receiver_thread)
-        # self.visualizer._external_controller_ref = self.external_controller # This is no longer needed
-        self.data_receiver_thread.start()
-
-        shutdown = False
-        loop_count = 0
-        cmdstarttime = time.time()
-
-        # --- Initialize vision results to None ---
-        real_vision_result, sim_vision_result = None, None
-
-        try:
-            while not shutdown:
-                loop_start = time.time()
-                if time.time() - cmdstarttime > runtime + 0.1:
-                    shutdown = True
-
-                events = pygame.event.get()
-                for e in events:
-                    if e.type == pygame.QUIT: shutdown = True; break
-                    if e.type == pygame.JOYBUTTONDOWN:
-                        if e.button == self.BTN_MENU: self.armed = not self.armed; print(f"\n[{'ARMED' if self.armed else 'DISARMED'}]")
-                        elif e.button == self.BTN_BACK: print("\n Toggling controller mode..."); self.toggle_external_controller()
-                        elif e.button == self.BTN_X: self.stabilization_enabled = not self.stabilization_enabled; print(f"\nStabilization: {'ON' if self.stabilization_enabled else 'OFF'}")
-                        elif e.button == self.BTN_B: self.light_on = not self.light_on; print(f"\nLIGHT: {'ON' if self.light_on else 'OFF'}")
-                        elif e.button == self.BTN_LB: self.sync_mode = 1 - self.sync_mode; print(f"\nMode switched to {'SYNC' if self.sync_mode else 'ASYNC'}")
-                        elif e.button == self.BTN_A:
-                            print("\nSending RESET signal to Sub & Sim..."); self.target_attitude = np.array([1.0, 0, 0, 0])
-                            if self.real_sub_client: self.real_sub_client.send_reset_command()
-                            asyncio.create_task(self.auv.reset(sync_flag=self.sync_mode))
-
-                # Handle GUI input boxes
-                updated_values = self.visualizer.handle_input_events(events)
-                if "sim_kp" in updated_values: self.pid_gains["yaw_sim"].kp = updated_values["sim_kp"]
-                if "real_kp" in updated_values: self.pid_gains["yaw_real"].kp = updated_values["real_kp"]
-                if "num_steps" in updated_values: self.live_num_steps = updated_values["num_steps"]
-                if "delay_ms" in updated_values: self.live_delay_ms = updated_values["delay_ms"]
-
-                if shutdown: break
-
-                # ==================================================================
-                # STEP 1: VISION PROCESSING (ALWAYS RUNS)
-                # ==================================================================
-                if self.external_controller:
-                    # Get the latest raw camera frames
-                    real_frame, sim_frame = None, None
-                    with self.data_receiver_thread.frame_lock:
-                        if self.data_receiver_thread.latest_frame is not None:
-                            real_frame = self.data_receiver_thread.latest_frame.copy()
-                    with self.data_receiver_thread.sim_frame_lock:
-                        if self.data_receiver_thread.latest_sim_frame is not None:
-                            sim_frame = self.data_receiver_thread.latest_sim_frame.copy()
-                    
-                    # Process frames ONCE per loop and get all results back
-                    real_vision_result, sim_vision_result = self.external_controller.update_loop(real_frame, sim_frame)
-
-                    # ALWAYS update the visualizer with the processed frames
-                    self.visualizer.last_processed_real = real_vision_result.processed_image
-                    self.visualizer.last_processed_sim = sim_vision_result.processed_image
-                else:
-                    # If no external controller, just pass raw frames for display
-                    with self.data_receiver_thread.frame_lock:
-                        self.visualizer.last_processed_real = self.data_receiver_thread.latest_frame
-                    with self.data_receiver_thread.sim_frame_lock:
-                        self.visualizer.last_processed_sim = self.data_receiver_thread.latest_sim_frame
-
-
-                # ==================================================================
-                # STEP 2: CONTROL INPUT SELECTION (DECISION LOGIC)
-                # ==================================================================
-                if self.external_controller_active and real_vision_result is not None:
-                    # --- Use External Controller Commands ---
-                    selected_camera = "sim" if self.visualizer.show_sim_camera else "real"
-                    active_result = sim_vision_result if selected_camera == "sim" else real_vision_result
-                    
-                    surge, strafe, heave, yaw_cmd = (
-                        active_result.surge, active_result.strafe,
-                        active_result.heave, active_result.yaw_cmd
-                    )
-
-                    # Joystick override logic
-                    joystick_surge, joystick_strafe, joystick_heave, joystick_yaw = self.get_controller_input()
-                    joystick_magnitude = abs(joystick_surge) + abs(joystick_strafe) + abs(joystick_heave) + abs(joystick_yaw)
-                    if joystick_magnitude > 0.1:
-                        print(" JOYSTICK OVERRIDE DETECTED")
-                        surge, strafe, heave, yaw_cmd = (joystick_surge, joystick_strafe, joystick_heave, joystick_yaw)
-                        self.external_controller_active = False # Disable for safety
-                        self.stabilization_enabled = False
-                else:
-                    # --- Use Joystick Commands ---
-                    surge, strafe, heave, yaw_cmd = self.get_controller_input()
-
-                # ==================================================================
-                # STEP 3: FORCE CALCULATION & DISPATCH (No changes here)
-                # ==================================================================
-                real_data = self.data_receiver_thread.latest_imu_data
-                current_attitude_real = (np.array(real_data["orientation"]["quaternion"]) if real_data and "orientation" in real_data and real_data.get("orientation") else None)
-                
-                sim_data, current_attitude_sim = None, None
-                try:
-                    sim_data = await asyncio.wait_for(self.auv.get_sensor_data(), timeout=0.005)
-                    if sim_data and "imu_quaternion" in sim_data: current_attitude_sim = sim_data["imu_quaternion"]
-                except asyncio.TimeoutError: pass
-                if current_attitude_sim is None: await asyncio.sleep(0.001); continue
-
-                sim_stab_f = self.calculate_stabilization_forces(current_attitude_sim, "sim")
-                real_stab_f = self.calculate_stabilization_forces(current_attitude_real, "real")
-
-                sim_surge, sim_strafe, sim_heave, sim_yaw_cmd = (surge * self.visualizer.input_values["sim_surge_mult"], strafe * self.visualizer.input_values["sim_strafe_mult"], heave * self.visualizer.input_values["sim_heave_mult"], yaw_cmd * self.visualizer.input_values["sim_yaw_mult"])
-                real_surge, real_strafe, real_heave, real_yaw_cmd = (surge * self.visualizer.input_values["real_surge_mult"], strafe * self.visualizer.input_values["real_strafe_mult"], heave * self.visualizer.input_values["real_heave_mult"], yaw_cmd * self.visualizer.input_values["real_yaw_mult"])
-
-                sim_f = self.calculate_thruster_forces(sim_surge, sim_strafe, sim_heave, sim_yaw_cmd, "sim", sim_stab_f)
-                real_f = self.calculate_thruster_forces(real_surge, real_strafe, real_heave, real_yaw_cmd, "real", real_stab_f)
-
-                tasks = [self.auv.apply_ctrl(sim_f if self.armed else np.zeros(6), self.live_num_steps, self.sync_mode)]
-                if self.real_sub_client: tasks.append(self.send_real_sub_with_delay(self.armed, self.light_on, real_f, self.live_delay_ms))
-
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-                # Update visualizer
-                controller_mode = "EXTERNAL" if self.external_controller_active else "JOYSTICK"
-                self.visualizer.hud_data.update({"armed": self.armed, "light_on": self.light_on, "stabilization": self.stabilization_enabled, "sync_mode": self.sync_mode, "controller_mode": controller_mode})
-                self.visualizer.update_depth_data(real_data, sim_data)
-                self.visualizer.update(imu_override=current_attitude_sim)
-
-                loop_time = time.time() - loop_start
-                self.loop_times.append(loop_time)
-                await asyncio.sleep(max(0, self.dt - loop_time))
-        finally:
-            print("Disarming and stopping...")
-            self.data_receiver_thread.stop()
-            self.data_receiver_thread.join(timeout=1)
-            plt.close("all")
-            if self.real_sub_client: self.real_sub_client.shutdown()
-            pygame.quit()
 
     def run_controller(self, *args):
         asyncio.run(self.run_controller_async(*args))

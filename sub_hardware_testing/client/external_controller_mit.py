@@ -2,7 +2,6 @@
 """
 External Controller for Submarine with YOLO-based object detection and chase strategy.
 Processes both camera feeds simultaneously but uses commands from selected camera only.
-Enhanced with robust target tracking from target_testing_robust_yolo.py
 """
 
 import time
@@ -72,137 +71,95 @@ class ChaseStrategyState(Enum):
 class ChaseAndCircleStrategy:
     """
     Implements a robust "Orbit and Re-advance" strategy. It includes a grace
-    period for transient bounding box losses and an active searching pattern.
-    Enhanced version from target_testing_robust_yolo.py
+    period for transient bounding box losses to prevent state oscillation.
     """
     def __init__(self, camera_width: int, camera_height: int):
         self.state = ChaseStrategyState.IDLE
         self.camera_center_x = camera_width / 2
-        # MODIFIED: Set a new vertical target for the bbox (lower part of the screen)
-        self.camera_target_y = camera_height * 0.75
+        self.camera_center_y = camera_height / 2
         print(f"Chase strategy initialized for {camera_width}x{camera_height} camera.")
-        print(f"Vertical target set to y={self.camera_target_y:.0f}")
         
         # --- Control Gains ---
         self.centering_kp = 0.0003
-        self.heaving_kp = 0.02
         self.advance_surge = 0.8
         self.orbit_strafe_command = 0.8
         self.max_yaw_error_for_strafe = 80.0
-        # NEW: Active search parameters
-        self.search_yaw_command = 0.03  # Yaw rate during active search
-        self.search_pattern_interval_s = 0.5  # Time to yaw in one direction
 
         # --- State Thresholds ---
         self.orbit_entry_thresh_area = camera_width * camera_height * 0.05
         self.orbit_exit_thresh_area = self.orbit_entry_thresh_area * 0.75
-        # NEW: Confidence threshold for acquiring a new target
-        self.search_confidence_threshold = 0.5
         
         # --- Timers and Robustness ---
-        self.orbit_duration_for_win_s = 2.0  # Reduced from 10.0 for faster wins
+        self.orbit_duration_for_win_s = 10.0
         self.celebration_time_s = 5.0
         self.state_timer = 0.0
         
         self.lost_target_grace_period_s = 0.5
         self.lost_target_timer = 0.0
-        # NEW: Timers for active searching
-        self.time_since_target_lost = 0.0
-        self.search_yaw_timer = 0.0
-        self.search_direction = 1  # 1 for right, -1 for left
 
-    def update(self, bbox: BoundingBox, confidence: float, dt: float) -> Tuple[float, float, float, float, bool]:
-        """
-        Calculates control commands based on the current state and target.
-        Enhanced with confidence-based target acquisition and active searching.
-        """
+    def update(self, bbox: BoundingBox, dt: float) -> Tuple[float, float, float, float, bool]:
         surge, strafe, heave, yaw = 0.0, 0.0, 0.0, 0.0
         flash_lights = False
 
-        # --- Handle Target Validity with Grace Period ---
         if bbox.is_valid:
             self.lost_target_timer = 0.0
         else:
             self.lost_target_timer += dt
 
-        # --- Global Target Lost Condition ---
         if self.lost_target_timer > self.lost_target_grace_period_s:
             if self.state != ChaseStrategyState.SEARCHING:
-                print(f"[{id(self)}] Target lost for over {self.lost_target_grace_period_s:.1f}s. Resetting to SEARCHING mode.")
                 self.state = ChaseStrategyState.SEARCHING
-                self.time_since_target_lost = 0.0  # Reset search timer
+            return 0.0, 0.0, 0.0, 0.0, False
 
-        # --- State Machine ---
-        # State: IDLE / SEARCHING
         if self.state in [ChaseStrategyState.IDLE, ChaseStrategyState.SEARCHING]:
-            self.time_since_target_lost += dt
-            # Active searching after 1.5 seconds of no target
-            if self.time_since_target_lost > 1.5:
-                self.search_yaw_timer += dt
-                if self.search_yaw_timer > self.search_pattern_interval_s:
-                    self.search_direction *= -1
-                    self.search_yaw_timer = 0.0
-                yaw = self.search_yaw_command * self.search_direction
-                print(f"[{id(self)}] Actively searching... Yawing {'RIGHT' if self.search_direction > 0 else 'LEFT'}", end='\r')
-
-            # Target acquisition with confidence threshold
-            if bbox.is_valid and confidence > self.search_confidence_threshold:
-                print(f"\n[{id(self)}] Target acquired with confidence {confidence:.2f}. Advancing.")
+            if bbox.is_valid:
+                print(f"[{id(self)}] Target acquired. Advancing.")
                 self.state = ChaseStrategyState.ADVANCING
-                self.time_since_target_lost = 0.0
         
-        # State: ADVANCING
         elif self.state == ChaseStrategyState.ADVANCING:
             surge = self.advance_surge
             strafe = 0.0
             
             if bbox.is_valid:
                 err_x = self.camera_center_x - bbox.center[0]
-                # MODIFIED: Use the new vertical target
-                err_y = self.camera_target_y - bbox.center[1]
+                err_y = self.camera_center_y - bbox.center[1]
                 yaw = self.centering_kp * err_x
-                # MODIFIED: Consistent heave logic with heaving_kp
-                heave = self.heaving_kp * err_y
+                heave = self.centering_kp * err_y
 
                 if bbox.area > self.orbit_entry_thresh_area:
-                    print(f"[{id(self)}] Target at optimal range. Entering dynamic ORBITING mode.")
+                    print(f"[{id(self)}] Target at optimal range. Entering ORBITING.")
                     self.state = ChaseStrategyState.ORBITING
                     self.state_timer = 0.0
         
-        # State: ORBITING
         elif self.state == ChaseStrategyState.ORBITING:
             surge = 0.0
             
             if bbox.is_valid:
                 err_x = self.camera_center_x - bbox.center[0]
-                # MODIFIED: Use the new vertical target to actively heave while orbiting
-                err_y = self.camera_target_y - bbox.center[1]
+                err_y = self.camera_center_y - bbox.center[1]
                 yaw = self.centering_kp * err_x
-                heave = self.heaving_kp * err_y  # Heave to keep target vertically aligned
+                heave = -self.centering_kp * err_y
                 strafe_scale = max(0.0, 1.0 - (abs(err_x) / self.max_yaw_error_for_strafe))
                 strafe = self.orbit_strafe_command * strafe_scale
 
                 if bbox.area < self.orbit_exit_thresh_area:
-                    print(f"[{id(self)}] Target has moved too far away. Re-engaging with ADVANCING.")
+                    print(f"[{id(self)}] Target moved away. Re-ADVANCING.")
                     self.state = ChaseStrategyState.ADVANCING
             else:
-                # Bbox is lost, but we're in the grace period. Continue orbiting.
                 strafe = self.orbit_strafe_command
             
             self.state_timer += dt
             if self.state_timer > self.orbit_duration_for_win_s:
-                print(f"[{id(self)}] Successfully orbited target. MISSION ACCOMPLISHED!")
+                print(f"[{id(self)}] Successfully orbited target. CELEBRATING.")
                 self.state = ChaseStrategyState.CELEBRATING
                 self.state_timer = 0.0
 
-        # State: CELEBRATING
         elif self.state == ChaseStrategyState.CELEBRATING:
             self.state_timer += dt
             flash_lights = (int(self.state_timer * 4) % 2) == 0
             if self.state_timer > self.celebration_time_s:
                 print(f"[{id(self)}] Celebration over. Returning to SEARCHING.")
                 self.state = ChaseStrategyState.SEARCHING
-                self.time_since_target_lost = 0.0
 
         return surge, strafe, heave, yaw, flash_lights
 
@@ -233,6 +190,12 @@ class MyController:
         print("  - Both REAL and SIM cameras will be processed with YOLO simultaneously.")
         print("  - The GUI checkbox determines which camera's commands are used.")
 
+# In external_controller.py, inside class MyController
+
+    # In external_controller.py, inside class MyController
+
+# In external_controller.py, inside class MyController
+
     def _process_single_camera(
         self,
         image_frame: Optional[np.ndarray],
@@ -242,7 +205,8 @@ class MyController:
     ) -> CameraProcessingResult:
         """
         Processes a single camera feed with corrected logic for flipping.
-        Enhanced to extract confidence values for robust target tracking.
+        It performs all calculations on the original image and only flips the
+        final canvas for display purposes.
         """
         is_sim = (camera_type == "sim")
         camera_label = "SIM" if is_sim else "REAL"
@@ -250,7 +214,6 @@ class MyController:
         yolo_model = self.yolo_model_sim if is_sim else self.yolo_model_real
         
         bbox_to_use = BoundingBox()
-        confidence_to_use = 0.0  # Initialize confidence
         has_frame = image_frame is not None
 
         # --- 1. Prepare the Canvas (NO FLIPPING HERE) ---
@@ -272,19 +235,16 @@ class MyController:
                         if box.conf and box.conf[0] > highest_conf:
                             highest_conf = box.conf[0]
                             best_box_coords = box.xywh[0]
-                
                 if best_box_coords is not None:
                     cx, cy, w, h = best_box_coords
                     bbox_to_use = BoundingBox(x=(cx - w/2).item(), y=(cy - h/2).item(),
                                               width=w.item(), height=h.item())
-                    confidence_to_use = highest_conf.item()  # Extract confidence value
-                    
             except Exception as e:
                 print(f"!!! YOLO Error on {camera_label} camera: {e}")
                 cv2.putText(canvas, "YOLO ERROR", (200, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
         
-        # --- 3. Get Control Commands from the Chase Strategy (using confidence) ---
-        s_surge, s_strafe, s_heave, s_yaw, flash_lights = chase_strategy.update(bbox_to_use, confidence_to_use, dt)
+        # --- 3. Get Control Commands from the Chase Strategy (using correct coordinates) ---
+        s_surge, s_strafe, s_heave, s_yaw, flash_lights = chase_strategy.update(bbox_to_use, dt)
         
         # --- 4. Draw All Overlays on the UNFLIPPED canvas ---
         if not has_frame:
@@ -294,10 +254,6 @@ class MyController:
             pt1 = (int(bbox_to_use.x), int(bbox_to_use.y))
             pt2 = (int(bbox_to_use.x + bbox_to_use.width), int(bbox_to_use.y + bbox_to_use.height))
             cv2.rectangle(canvas, pt1, pt2, (0, 255, 0), 2)
-            
-            # Draw confidence score
-            conf_text = f"Conf: {confidence_to_use:.2f}"
-            cv2.putText(canvas, conf_text, (pt1[0], pt1[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         state_text = f"STATE: {chase_strategy.state.name}"
         cv2.putText(canvas, state_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, camera_color, 2)

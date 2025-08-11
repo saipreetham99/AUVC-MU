@@ -1,97 +1,87 @@
 #!/usr/bin/env python3
 """
-Pull UDP packets, rebuild frames, show video.
-Default server filter 198.168.2.11, port 5005.
+Fire webcam frames over UDP.
+Reads client IP and port from a config file.
 """
-
 import cv2
 import socket
 import struct
-import numpy as np
-import time
-from collections import defaultdict
+import argparse
 import os
 import configparser
 import sys
-import argparse
+import time
 
-TIMEOUT = 0.5        # seconds before tossing half‑baked frame
-
+CHUNK = 60_000  # keep packets < 65_507 bytes
 
 def main():
     # --- Load Credentials ---
-    parser = argparse.ArgumentParser(description="UDP Video Stream Client")
+    parser = argparse.ArgumentParser(description="UDP Video Stream Server")
     parser.add_argument('--wifi', action='store_true',
                         help='Use WiFi IP/network settings instead of LAN.')
-    parser.add_argument('--timeout', type=float, default=TIMEOUT)
+    parser.add_argument('--source', type=int, default=0,
+                        help='cv2.VideoCapture index')
+    parser.add_argument('--quality', type=int, default=None, # Default to None to use config
+                        help='JPEG quality (0-100)')
+    parser.add_argument('--chunk', type=int, default=CHUNK)
     args = parser.parse_args()
 
     mode = 'wifi' if args.wifi else 'lan'
-    # The client needs to know the server's ports, so we read the server config file
     config_path = os.path.expanduser('~/.rov_server_creds')
-
     config = configparser.ConfigParser()
+
     if not os.path.exists(config_path) or not config.read(config_path):
-        sys.exit(f"✗ ERROR: Config file not found or is empty at '{
-                 config_path}'")
+        sys.exit(f"✗ ERROR: Config file not found or is empty at '{config_path}'")
 
     try:
         creds = config[mode]
-        server_ip = creds['rov_ip']
+        # The server sends to the client_ip
+        client_ip = creds['client_ip']
         port = config.getint('DEFAULT', 'video_port')
+        # Use command line quality if provided, otherwise use config file
+        quality = args.quality if args.quality is not None else config.getint('DEFAULT', 'video_quality', fallback=75)
         print(f"✓ Loaded '{mode}' settings from '{config_path}'")
     except (KeyError, configparser.NoSectionError) as e:
         sys.exit(f"✗ ERROR: Missing section or key in config file: {e}")
     # --- End Load Credentials ---
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('', port))
-    sock.settimeout(1.0)
-    print(f"Listening for video from {server_ip} on port {port}")
+    cam = cv2.VideoCapture(args.source)
+    if not cam.isOpened():
+        sys.exit(f"✗ ERROR: Cannot open camera source {args.source}")
 
-    buffers = defaultdict(
-        lambda: {'total': None, 'parts': {}, 'ts': time.time()})
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    enc_param = [cv2.IMWRITE_JPEG_QUALITY, quality]
+    fid = 0
+
+    print(f"Streaming video to {client_ip} on port {port} with {quality}% quality.")
+    print("Press Ctrl+C to stop.")
 
     while True:
-        try:
-            packet, addr = sock.recvfrom(65_535)
-        except socket.timeout:
+        ok, frame = cam.read()
+        if not ok:
+            print("Camera read failed, stopping.")
+            break
+
+        ok, buf = cv2.imencode('.jpg', frame, enc_param)
+        if not ok:
+            print("JPEG encoding failed.")
             continue
 
-        # Filter packets to only accept from the configured ROV IP
-        if server_ip != 'any' and addr[0] != server_ip:
-            continue
+        data = buf.tobytes()
+        blocks = (len(data) - 1) // args.chunk + 1
 
-        fid, total, idx = struct.unpack('!HHH', packet[:6])
-        payload = packet[6:]
-
-        buf = buffers[fid]
-        buf['ts'] = time.time()
-        if buf['total'] is None:
-            buf['total'] = total
-        buf['parts'][idx] = payload
-
-        # got all chunks?
-        if len(buf['parts']) == buf['total']:
-            parts = [buf['parts'][i] for i in range(buf['total'])]
-            jpg = b''.join(parts)
-            frame = cv2.imdecode(np.frombuffer(
-                jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-            if frame is not None:
-                cv2.imshow('UDP Stream', frame)
-                if cv2.waitKey(1) == 27:   # ESC to quit
-                    break
-            del buffers[fid]
-
-        # purge stale frames
-        now = time.time()
-        dead = [k for k, v in buffers.items() if now - v['ts'] > args.timeout]
-        for k in dead:
-            del buffers[k]
-
-    sock.close()
-    cv2.destroyAllWindows()
-
+        for idx in range(blocks):
+            start = idx * args.chunk
+            part = data[start:start + args.chunk]
+            header = struct.pack('!HHH', fid & 0xFFFF, blocks, idx)
+            sock.sendto(header + part, (client_ip, port))
+        
+        fid += 1
+        # A small sleep can prevent overwhelming the network
+        time.sleep(0.01)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nServer is shutting down.")
